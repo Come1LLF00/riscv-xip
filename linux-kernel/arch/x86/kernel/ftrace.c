@@ -66,7 +66,7 @@ int ftrace_arch_code_modify_post_process(void)
 
 static const char *ftrace_nop_replace(void)
 {
-	return ideal_nops[NOP_ATOMIC5];
+	return x86_nops[5];
 }
 
 static const char *ftrace_call_replace(unsigned long ip, unsigned long addr)
@@ -86,7 +86,7 @@ static int ftrace_verify_code(unsigned long ip, const char *old_code)
 	 * sure what we read is what we expected it to be before modifying it.
 	 */
 	/* read the text we want to modify */
-	if (probe_kernel_read(cur_code, (void *)ip, MCOUNT_INSN_SIZE)) {
+	if (copy_from_kernel_nofault(cur_code, (void *)ip, MCOUNT_INSN_SIZE)) {
 		WARN_ON(1);
 		return -EFAULT;
 	}
@@ -252,11 +252,6 @@ void arch_ftrace_update_code(int command)
 	ftrace_modify_all_code(command);
 }
 
-int __init ftrace_dyn_arch_init(void)
-{
-	return 0;
-}
-
 /* Currently only x86_64 supports dynamic trampolines */
 #ifdef CONFIG_X86_64
 
@@ -282,9 +277,11 @@ static inline void tramp_free(void *tramp) { }
 
 /* Defined as markers to the end of the ftrace default trampolines */
 extern void ftrace_regs_caller_end(void);
-extern void ftrace_epilogue(void);
+extern void ftrace_regs_caller_ret(void);
+extern void ftrace_caller_end(void);
 extern void ftrace_caller_op_ptr(void);
 extern void ftrace_regs_caller_op_ptr(void);
+extern void ftrace_regs_caller_jmp(void);
 
 /* movq function_trace_op(%rip), %rdx */
 /* 0x48 0x8b 0x15 <offset-to-ftrace_trace_op (4 bytes)> */
@@ -306,7 +303,7 @@ union ftrace_op_code_union {
 	} __attribute__((packed));
 };
 
-#define RET_SIZE		1
+#define RET_SIZE		1 + IS_ENABLED(CONFIG_SLS)
 
 static unsigned long
 create_trampoline(struct ftrace_ops *ops, unsigned int *tramp_size)
@@ -315,6 +312,7 @@ create_trampoline(struct ftrace_ops *ops, unsigned int *tramp_size)
 	unsigned long end_offset;
 	unsigned long op_offset;
 	unsigned long call_offset;
+	unsigned long jmp_offset;
 	unsigned long offset;
 	unsigned long npages;
 	unsigned long size;
@@ -332,11 +330,13 @@ create_trampoline(struct ftrace_ops *ops, unsigned int *tramp_size)
 		end_offset = (unsigned long)ftrace_regs_caller_end;
 		op_offset = (unsigned long)ftrace_regs_caller_op_ptr;
 		call_offset = (unsigned long)ftrace_regs_call;
+		jmp_offset = (unsigned long)ftrace_regs_caller_jmp;
 	} else {
 		start_offset = (unsigned long)ftrace_caller;
-		end_offset = (unsigned long)ftrace_epilogue;
+		end_offset = (unsigned long)ftrace_caller_end;
 		op_offset = (unsigned long)ftrace_caller_op_ptr;
 		call_offset = (unsigned long)ftrace_call;
+		jmp_offset = 0;
 	}
 
 	size = end_offset - start_offset;
@@ -354,7 +354,7 @@ create_trampoline(struct ftrace_ops *ops, unsigned int *tramp_size)
 	npages = DIV_ROUND_UP(*tramp_size, PAGE_SIZE);
 
 	/* Copy ftrace_caller onto the trampoline memory */
-	ret = probe_kernel_read(trampoline, (void *)start_offset, size);
+	ret = copy_from_kernel_nofault(trampoline, (void *)start_offset, size);
 	if (WARN_ON(ret < 0))
 		goto fail;
 
@@ -362,9 +362,20 @@ create_trampoline(struct ftrace_ops *ops, unsigned int *tramp_size)
 
 	/* The trampoline ends with ret(q) */
 	retq = (unsigned long)ftrace_stub;
-	ret = probe_kernel_read(ip, (void *)retq, RET_SIZE);
+	ret = copy_from_kernel_nofault(ip, (void *)retq, RET_SIZE);
 	if (WARN_ON(ret < 0))
 		goto fail;
+
+	/* No need to test direct calls on created trampolines */
+	if (ops->flags & FTRACE_OPS_FL_SAVE_REGS) {
+		/* NOP the jnz 1f; but make sure it's a 2 byte jnz */
+		ip = trampoline + (jmp_offset - start_offset);
+		if (WARN_ON(*(char *)ip != 0x75))
+			goto fail;
+		ret = copy_from_kernel_nofault(ip, x86_nops[2], 2);
+		if (ret < 0)
+			goto fail;
+	}
 
 	/*
 	 * The address of the ftrace_ops that is used for this trampoline
@@ -407,12 +418,39 @@ create_trampoline(struct ftrace_ops *ops, unsigned int *tramp_size)
 
 	set_vm_flush_reset_perms(trampoline);
 
-	set_memory_ro((unsigned long)trampoline, npages);
+	if (likely(system_state != SYSTEM_BOOTING))
+		set_memory_ro((unsigned long)trampoline, npages);
 	set_memory_x((unsigned long)trampoline, npages);
 	return (unsigned long)trampoline;
 fail:
 	tramp_free(trampoline);
 	return 0;
+}
+
+void set_ftrace_ops_ro(void)
+{
+	struct ftrace_ops *ops;
+	unsigned long start_offset;
+	unsigned long end_offset;
+	unsigned long npages;
+	unsigned long size;
+
+	do_for_each_ftrace_op(ops, ftrace_ops_list) {
+		if (!(ops->flags & FTRACE_OPS_FL_ALLOC_TRAMP))
+			continue;
+
+		if (ops->flags & FTRACE_OPS_FL_SAVE_REGS) {
+			start_offset = (unsigned long)ftrace_regs_caller;
+			end_offset = (unsigned long)ftrace_regs_caller_end;
+		} else {
+			start_offset = (unsigned long)ftrace_caller;
+			end_offset = (unsigned long)ftrace_caller_end;
+		}
+		size = end_offset - start_offset;
+		size = size + RET_SIZE + sizeof(void *);
+		npages = DIV_ROUND_UP(size, PAGE_SIZE);
+		set_memory_ro((unsigned long)ops->trampoline, npages);
+	} while_for_each_ftrace_op(ops);
 }
 
 static unsigned long calc_trampoline_call_offset(bool save_regs)
@@ -471,7 +509,7 @@ static void *addr_from_call(void *ptr)
 	union text_poke_insn call;
 	int ret;
 
-	ret = probe_kernel_read(&call, ptr, CALL_INSN_SIZE);
+	ret = copy_from_kernel_nofault(&call, ptr, CALL_INSN_SIZE);
 	if (WARN_ON_ONCE(ret < 0))
 		return NULL;
 
@@ -484,7 +522,7 @@ static void *addr_from_call(void *ptr)
 	return ptr + CALL_INSN_SIZE + call.disp;
 }
 
-void prepare_ftrace_return(unsigned long self_addr, unsigned long *parent,
+void prepare_ftrace_return(unsigned long ip, unsigned long *parent,
 			   unsigned long frame_pointer);
 
 /*
@@ -498,7 +536,8 @@ static void *static_tramp_func(struct ftrace_ops *ops, struct dyn_ftrace *rec)
 	void *ptr;
 
 	if (ops && ops->trampoline) {
-#ifdef CONFIG_FUNCTION_GRAPH_TRACER
+#if !defined(CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS) && \
+	defined(CONFIG_FUNCTION_GRAPH_TRACER)
 		/*
 		 * We only know about function graph tracer setting as static
 		 * trampoline.
@@ -546,8 +585,9 @@ void arch_ftrace_trampoline_free(struct ftrace_ops *ops)
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
 
 #ifdef CONFIG_DYNAMIC_FTRACE
-extern void ftrace_graph_call(void);
 
+#ifndef CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS
+extern void ftrace_graph_call(void);
 static const char *ftrace_jmp_replace(unsigned long ip, unsigned long addr)
 {
 	return text_gen_insn(JMP32_INSN_OPCODE, (void *)ip, (void *)addr);
@@ -575,19 +615,28 @@ int ftrace_disable_ftrace_graph_caller(void)
 
 	return ftrace_mod_jmp(ip, &ftrace_stub);
 }
+#else /* !CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS */
+int ftrace_enable_ftrace_graph_caller(void)
+{
+	return 0;
+}
 
+int ftrace_disable_ftrace_graph_caller(void)
+{
+	return 0;
+}
+#endif /* CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS */
 #endif /* !CONFIG_DYNAMIC_FTRACE */
 
 /*
  * Hook the return address and push it in the stack of return addrs
  * in current thread info.
  */
-void prepare_ftrace_return(unsigned long self_addr, unsigned long *parent,
+void prepare_ftrace_return(unsigned long ip, unsigned long *parent,
 			   unsigned long frame_pointer)
 {
 	unsigned long return_hooker = (unsigned long)&return_to_handler;
-	unsigned long old;
-	int faulted;
+	int bit;
 
 	/*
 	 * When resuming from suspend-to-ram, this function can be indirectly
@@ -607,37 +656,25 @@ void prepare_ftrace_return(unsigned long self_addr, unsigned long *parent,
 	if (unlikely(atomic_read(&current->tracing_graph_pause)))
 		return;
 
-	/*
-	 * Protect against fault, even if it shouldn't
-	 * happen. This tool is too much intrusive to
-	 * ignore such a protection.
-	 */
-	asm volatile(
-		"1: " _ASM_MOV " (%[parent]), %[old]\n"
-		"2: " _ASM_MOV " %[return_hooker], (%[parent])\n"
-		"   movl $0, %[faulted]\n"
-		"3:\n"
-
-		".section .fixup, \"ax\"\n"
-		"4: movl $1, %[faulted]\n"
-		"   jmp 3b\n"
-		".previous\n"
-
-		_ASM_EXTABLE(1b, 4b)
-		_ASM_EXTABLE(2b, 4b)
-
-		: [old] "=&r" (old), [faulted] "=r" (faulted)
-		: [parent] "r" (parent), [return_hooker] "r" (return_hooker)
-		: "memory"
-	);
-
-	if (unlikely(faulted)) {
-		ftrace_graph_stop();
-		WARN_ON(1);
+	bit = ftrace_test_recursion_trylock(ip, *parent);
+	if (bit < 0)
 		return;
-	}
 
-	if (function_graph_enter(old, self_addr, frame_pointer, parent))
-		*parent = old;
+	if (!function_graph_enter(*parent, ip, frame_pointer, parent))
+		*parent = return_hooker;
+
+	ftrace_test_recursion_unlock(bit);
 }
+
+#ifdef CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS
+void ftrace_graph_func(unsigned long ip, unsigned long parent_ip,
+		       struct ftrace_ops *op, struct ftrace_regs *fregs)
+{
+	struct pt_regs *regs = &fregs->regs;
+	unsigned long *stack = (unsigned long *)kernel_stack_pointer(regs);
+
+	prepare_ftrace_return(ip, (unsigned long *)stack, 0);
+}
+#endif
+
 #endif /* CONFIG_FUNCTION_GRAPH_TRACER */

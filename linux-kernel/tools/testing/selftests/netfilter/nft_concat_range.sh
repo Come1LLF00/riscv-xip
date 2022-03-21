@@ -13,17 +13,21 @@
 KSELFTEST_SKIP=4
 
 # Available test groups:
+# - reported_issues: check for issues that were reported in the past
 # - correctness: check that packets match given entries, and only those
 # - concurrency: attempt races between insertion, deletion and lookup
 # - timeout: check that packets match entries until they expire
 # - performance: estimate matching rate, compare with rbtree and hash baselines
-TESTS="correctness concurrency timeout"
+TESTS="reported_issues correctness concurrency timeout"
 [ "${quicktest}" != "1" ] && TESTS="${TESTS} performance"
 
 # Set types, defined by TYPE_ variables below
 TYPES="net_port port_net net6_port port_proto net6_port_mac net6_port_mac_proto
-       net_port_net net_mac net_mac_icmp net6_mac_icmp net6_port_net6_port
-       net_port_mac_proto_net"
+       net_port_net net_mac mac_net net_mac_icmp net6_mac_icmp
+       net6_port_net6_port net_port_mac_proto_net"
+
+# Reported bugs, also described by TYPE_ variables below
+BUGS="flush_remove_add reload"
 
 # List of possible paths to pktgen script from kernel tree for performance tests
 PKTGEN_SCRIPT_PATHS="
@@ -273,6 +277,23 @@ perf_entries	1000
 perf_proto	ipv4
 "
 
+TYPE_mac_net="
+display		mac,net
+type_spec	ether_addr . ipv4_addr
+chain_spec	ether saddr . ip saddr
+dst		 
+src		mac addr4
+start		1
+count		5
+src_delta	2000
+tools		sendip nc bash
+proto		udp
+
+race_repeat	0
+
+perf_duration	0
+"
+
 TYPE_net_mac_icmp="
 display		net,mac - ICMP
 type_spec	ipv4_addr . ether_addr
@@ -323,6 +344,29 @@ race_repeat	3
 flood_tools	iperf3 iperf netperf
 flood_proto	tcp
 flood_spec	ip daddr . tcp dport . meta l4proto . ip saddr
+
+perf_duration	0
+"
+
+# Definition of tests for bugs reported in the past:
+# display	display text for test report
+TYPE_flush_remove_add="
+display		Add two elements, flush, re-add
+"
+
+TYPE_reload="
+display		net,mac with reload
+type_spec	ipv4_addr . ether_addr
+chain_spec	ip daddr . ether saddr
+dst		addr4
+src		mac
+start		1
+count		1
+src_delta	2000
+tools		sendip nc bash
+proto		udp
+
+race_repeat	0
 
 perf_duration	0
 "
@@ -440,6 +484,8 @@ setup_set() {
 
 # Check that at least one of the needed tools is available
 check_tools() {
+	[ -z "${tools}" ] && return 0
+
 	__tools=
 	for tool in ${tools}; do
 		if [ "${tool}" = "nc" ] && [ "${proto}" = "udp6" ] && \
@@ -972,7 +1018,8 @@ format() {
 		fi
 	done
 	for f in ${src}; do
-		__expr="${__expr} . "
+		[ "${__expr}" != "{ " ] && __expr="${__expr} . "
+
 		__start="$(eval format_"${f}" "${srcstart}")"
 		__end="$(eval format_"${f}" "${srcend}")"
 
@@ -1025,7 +1072,7 @@ format_noconcat() {
 add() {
 	if ! nft add element inet filter test "${1}"; then
 		err "Failed to add ${1} given ruleset:"
-		err "$(nft list ruleset -a)"
+		err "$(nft -a list ruleset)"
 		return 1
 	fi
 }
@@ -1045,7 +1092,7 @@ add_perf() {
 add_perf_norange() {
 	if ! nft add element netdev perf norange "${1}"; then
 		err "Failed to add ${1} given ruleset:"
-		err "$(nft list ruleset -a)"
+		err "$(nft -a list ruleset)"
 		return 1
 	fi
 }
@@ -1054,7 +1101,7 @@ add_perf_norange() {
 add_perf_noconcat() {
 	if ! nft add element netdev perf noconcat "${1}"; then
 		err "Failed to add ${1} given ruleset:"
-		err "$(nft list ruleset -a)"
+		err "$(nft -a list ruleset)"
 		return 1
 	fi
 }
@@ -1063,7 +1110,7 @@ add_perf_noconcat() {
 del() {
 	if ! nft delete element inet filter test "${1}"; then
 		err "Failed to delete ${1} given ruleset:"
-		err "$(nft list ruleset -a)"
+		err "$(nft -a list ruleset)"
 		return 1
 	fi
 }
@@ -1134,7 +1181,7 @@ send_match() {
 		err "  $(for f in ${src}; do
 			 eval format_\$f "${2}"; printf ' '; done)"
 		err "should have matched ruleset:"
-		err "$(nft list ruleset -a)"
+		err "$(nft -a list ruleset)"
 		return 1
 	fi
 	nft reset counter inet filter test >/dev/null
@@ -1160,7 +1207,7 @@ send_nomatch() {
 		err "  $(for f in ${src}; do
 			 eval format_\$f "${2}"; printf ' '; done)"
 		err "should not have matched ruleset:"
-		err "$(nft list ruleset -a)"
+		err "$(nft -a list ruleset)"
 		return 1
 	fi
 }
@@ -1430,6 +1477,76 @@ test_performance() {
 	kill "${perf_pid}"
 }
 
+test_bug_flush_remove_add() {
+	set_cmd='{ set s { type ipv4_addr . inet_service; flags interval; }; }'
+	elem1='{ 10.0.0.1 . 22-25, 10.0.0.1 . 10-20 }'
+	elem2='{ 10.0.0.1 . 10-20, 10.0.0.1 . 22-25 }'
+	for i in `seq 1 100`; do
+		nft add table t ${set_cmd}	|| return ${KSELFTEST_SKIP}
+		nft add element t s ${elem1}	2>/dev/null || return 1
+		nft flush set t s		2>/dev/null || return 1
+		nft add element t s ${elem2}	2>/dev/null || return 1
+	done
+	nft flush ruleset
+}
+
+# - add ranged element, check that packets match it
+# - reload the set, check packets still match
+test_bug_reload() {
+	setup veth send_"${proto}" set || return ${KSELFTEST_SKIP}
+	rstart=${start}
+
+	range_size=1
+	for i in $(seq "${start}" $((start + count))); do
+		end=$((start + range_size))
+
+		# Avoid negative or zero-sized port ranges
+		if [ $((end / 65534)) -gt $((start / 65534)) ]; then
+			start=${end}
+			end=$((end + 1))
+		fi
+		srcstart=$((start + src_delta))
+		srcend=$((end + src_delta))
+
+		add "$(format)" || return 1
+		range_size=$((range_size + 1))
+		start=$((end + range_size))
+	done
+
+	# check kernel does allocate pcpu sctrach map
+	# for reload with no elemet add/delete
+	( echo flush set inet filter test ;
+	  nft list set inet filter test ) | nft -f -
+
+	start=${rstart}
+	range_size=1
+
+	for i in $(seq "${start}" $((start + count))); do
+		end=$((start + range_size))
+
+		# Avoid negative or zero-sized port ranges
+		if [ $((end / 65534)) -gt $((start / 65534)) ]; then
+			start=${end}
+			end=$((end + 1))
+		fi
+		srcstart=$((start + src_delta))
+		srcend=$((end + src_delta))
+
+		for j in $(seq ${start} $((range_size / 2 + 1)) ${end}); do
+			send_match "${j}" $((j + src_delta)) || return 1
+		done
+
+		range_size=$((range_size + 1))
+		start=$((end + range_size))
+	done
+
+	nft flush ruleset
+}
+
+test_reported_issues() {
+	eval test_bug_"${subtest}"
+}
+
 # Run everything in a separate network namespace
 [ "${1}" != "run" ] && { unshare -n "${0}" run; exit $?; }
 tmp="$(mktemp)"
@@ -1438,9 +1555,15 @@ trap cleanup EXIT
 # Entry point for test runs
 passed=0
 for name in ${TESTS}; do
-	printf "TEST: %s\n" "${name}"
-	for type in ${TYPES}; do
-		eval desc=\$TYPE_"${type}"
+	printf "TEST: %s\n" "$(echo ${name} | tr '_' ' ')"
+	if [ "${name}" = "reported_issues" ]; then
+		SUBTESTS="${BUGS}"
+	else
+		SUBTESTS="${TYPES}"
+	fi
+
+	for subtest in ${SUBTESTS}; do
+		eval desc=\$TYPE_"${subtest}"
 		IFS='
 '
 		for __line in ${desc}; do
@@ -1478,4 +1601,4 @@ for name in ${TESTS}; do
 	done
 done
 
-[ ${passed} -eq 0 ] && exit ${KSELFTEST_SKIP}
+[ ${passed} -eq 0 ] && exit ${KSELFTEST_SKIP} || exit 0

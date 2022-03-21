@@ -1,0 +1,36 @@
+
+# This script runs OpenSBI, U-Boot and Linux on the BeagleV Starlight platform in Renode
+
+$name?="BeagleV"
+#set bin $ORIGIN/images/fw_payload.elf
+set bin $ORIGIN/binaries/fw_payload.elf
+set uboot $ORIGIN/images/u-boot
+set linux $ORIGIN/images/vmlinux
+set dtb $ORIGIN/images/starfive_vic7100_beagle_v.dtb
+set fit $ORIGIN/images/Image
+set xip $ORIGIN/images/xipImage
+
+emulation SetSeed 0x1
+EnsureTypeIsLoaded "Antmicro.Renode.Peripherals.IRQControllers.PLIC.IPlatformLevelInterruptController"
+include $ORIGIN/models/BeagleV_PlatformLevelInterruptController.cs
+
+using sysbus
+mach create $name
+machine LoadPlatformDescription $ORIGIN/beaglev_starlight.repl
+machine StartGdbServer 3333
+emulation SetGlobalSerialExecution True
+
+showAnalyzer uart3
+
+macro reset
+"""
+    sysbus LoadELF $bin
+    sysbus LoadSymbolsFrom $uboot
+    sysbus LoadSymbolsFrom $linux
+    sysbus LoadBinary $xip 0x20000000
+    sysbus LoadBinary $dtb 0xa0100000
+"""
+runMacro $reset
+
+echo "Script loaded. Now start with with the 'start' command."
+echo ""

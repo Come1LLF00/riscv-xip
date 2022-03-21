@@ -38,15 +38,15 @@ static void quirk_add(struct drm_i915_gem_object *obj,
 		      struct list_head *objects)
 {
 	/* quirk is only for live tiled objects, use it to declare ownership */
-	GEM_BUG_ON(obj->mm.quirked);
-	obj->mm.quirked = true;
+	GEM_BUG_ON(i915_gem_object_has_tiling_quirk(obj));
+	i915_gem_object_set_tiling_quirk(obj);
 	list_add(&obj->st_link, objects);
 }
 
 static int populate_ggtt(struct i915_ggtt *ggtt, struct list_head *objects)
 {
-	unsigned long unbound, bound, count;
 	struct drm_i915_gem_object *obj;
+	unsigned long count;
 
 	count = 0;
 	do {
@@ -72,30 +72,6 @@ static int populate_ggtt(struct i915_ggtt *ggtt, struct list_head *objects)
 	pr_debug("Filled GGTT with %lu pages [%llu total]\n",
 		 count, ggtt->vm.total / PAGE_SIZE);
 
-	bound = 0;
-	unbound = 0;
-	list_for_each_entry(obj, objects, st_link) {
-		GEM_BUG_ON(!obj->mm.quirked);
-
-		if (atomic_read(&obj->bind_count))
-			bound++;
-		else
-			unbound++;
-	}
-	GEM_BUG_ON(bound + unbound != count);
-
-	if (unbound) {
-		pr_err("%s: Found %lu objects unbound, expected %u!\n",
-		       __func__, unbound, 0);
-		return -EINVAL;
-	}
-
-	if (bound != count) {
-		pr_err("%s: Found %lu objects bound, expected %lu!\n",
-		       __func__, bound, count);
-		return -EINVAL;
-	}
-
 	if (list_empty(&ggtt->vm.bound_list)) {
 		pr_err("No objects on the GGTT inactive list!\n");
 		return -EINVAL;
@@ -109,7 +85,7 @@ static void unpin_ggtt(struct i915_ggtt *ggtt)
 	struct i915_vma *vma;
 
 	list_for_each_entry(vma, &ggtt->vm.bound_list, vm_link)
-		if (vma->obj->mm.quirked)
+		if (i915_gem_object_has_tiling_quirk(vma->obj))
 			i915_vma_unpin(vma);
 }
 
@@ -118,8 +94,8 @@ static void cleanup_objects(struct i915_ggtt *ggtt, struct list_head *list)
 	struct drm_i915_gem_object *obj, *on;
 
 	list_for_each_entry_safe(obj, on, list, st_link) {
-		GEM_BUG_ON(!obj->mm.quirked);
-		obj->mm.quirked = false;
+		GEM_BUG_ON(!i915_gem_object_has_tiling_quirk(obj));
+		i915_gem_object_set_tiling_quirk(obj);
 		i915_gem_object_put(obj);
 	}
 
@@ -466,28 +442,23 @@ static int igt_evict_contexts(void *arg)
 	/* Overfill the GGTT with context objects and so try to evict one. */
 	for_each_engine(engine, gt, id) {
 		struct i915_sw_fence fence;
-		struct file *file;
-
-		file = mock_file(i915);
-		if (IS_ERR(file)) {
-			err = PTR_ERR(file);
-			break;
-		}
+		struct i915_request *last = NULL;
 
 		count = 0;
 		onstack_fence_init(&fence);
 		do {
+			struct intel_context *ce;
 			struct i915_request *rq;
-			struct i915_gem_context *ctx;
 
-			ctx = live_context(i915, file);
-			if (IS_ERR(ctx))
+			ce = intel_context_create(engine);
+			if (IS_ERR(ce))
 				break;
 
 			/* We will need some GGTT space for the rq's context */
 			igt_evict_ctl.fail_if_busy = true;
-			rq = igt_request_alloc(ctx, engine);
+			rq = intel_context_create_request(ce);
 			igt_evict_ctl.fail_if_busy = false;
+			intel_context_put(ce);
 
 			if (IS_ERR(rq)) {
 				/* When full, fail_if_busy will trigger EBUSY */
@@ -509,15 +480,31 @@ static int igt_evict_contexts(void *arg)
 
 			i915_request_add(rq);
 			count++;
+			if (last)
+				i915_request_put(last);
+			last = i915_request_get(rq);
 			err = 0;
 		} while(1);
 		onstack_fence_fini(&fence);
 		pr_info("Submitted %lu contexts/requests on %s\n",
 			count, engine->name);
-
-		fput(file);
 		if (err)
 			break;
+		if (last) {
+			if (i915_request_wait(last, 0, HZ) < 0) {
+				err = -EIO;
+				i915_request_put(last);
+				pr_err("Failed waiting for last request (on %s)",
+				       engine->name);
+				break;
+			}
+			i915_request_put(last);
+		}
+		err = intel_gt_wait_for_idle(engine->gt, HZ * 3);
+		if (err) {
+			pr_err("Failed to idle GT (on %s)", engine->name);
+			break;
+		}
 	}
 
 	mutex_lock(&ggtt->vm.mutex);
@@ -558,9 +545,9 @@ int i915_gem_evict_mock_selftests(void)
 		return -ENOMEM;
 
 	with_intel_runtime_pm(&i915->runtime_pm, wakeref)
-		err = i915_subtests(tests, &i915->gt);
+		err = i915_subtests(tests, to_gt(i915));
 
-	drm_dev_put(&i915->drm);
+	mock_destroy_device(i915);
 	return err;
 }
 
@@ -570,8 +557,8 @@ int i915_gem_evict_live_selftests(struct drm_i915_private *i915)
 		SUBTEST(igt_evict_contexts),
 	};
 
-	if (intel_gt_is_wedged(&i915->gt))
+	if (intel_gt_is_wedged(to_gt(i915)))
 		return 0;
 
-	return intel_gt_live_subtests(tests, &i915->gt);
+	return intel_gt_live_subtests(tests, to_gt(i915));
 }

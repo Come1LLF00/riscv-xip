@@ -193,7 +193,7 @@ unsigned long cmci_intel_adjust_timer(unsigned long interval)
 		if (!atomic_sub_return(1, &cmci_storm_on_cpus))
 			pr_notice("CMCI storm subsided: switching to interrupt mode\n");
 
-		/* FALLTHROUGH */
+		fallthrough;
 
 	case CMCI_STORM_SUBSIDED:
 		/*
@@ -486,6 +486,8 @@ static void intel_ppin_init(struct cpuinfo_x86 *c)
 	case INTEL_FAM6_BROADWELL_X:
 	case INTEL_FAM6_SKYLAKE_X:
 	case INTEL_FAM6_ICELAKE_X:
+	case INTEL_FAM6_ICELAKE_D:
+	case INTEL_FAM6_SAPPHIRERAPIDS_X:
 	case INTEL_FAM6_XEON_PHI_KNL:
 	case INTEL_FAM6_XEON_PHI_KNM:
 
@@ -493,30 +495,69 @@ static void intel_ppin_init(struct cpuinfo_x86 *c)
 			return;
 
 		if ((val & 3UL) == 1UL) {
-			/* PPIN available but disabled: */
+			/* PPIN locked in disabled mode */
 			return;
 		}
 
-		/* If PPIN is disabled, but not locked, try to enable: */
-		if (!(val & 3UL)) {
+		/* If PPIN is disabled, try to enable */
+		if (!(val & 2UL)) {
 			wrmsrl_safe(MSR_PPIN_CTL,  val | 2UL);
 			rdmsrl_safe(MSR_PPIN_CTL, &val);
 		}
 
-		if ((val & 3UL) == 2UL)
+		/* Is the enable bit set? */
+		if (val & 2UL)
 			set_cpu_cap(c, X86_FEATURE_INTEL_PPIN);
+	}
+}
+
+/*
+ * Enable additional error logs from the integrated
+ * memory controller on processors that support this.
+ */
+static void intel_imc_init(struct cpuinfo_x86 *c)
+{
+	u64 error_control;
+
+	switch (c->x86_model) {
+	case INTEL_FAM6_SANDYBRIDGE_X:
+	case INTEL_FAM6_IVYBRIDGE_X:
+	case INTEL_FAM6_HASWELL_X:
+		if (rdmsrl_safe(MSR_ERROR_CONTROL, &error_control))
+			return;
+		error_control |= 2;
+		wrmsrl_safe(MSR_ERROR_CONTROL, error_control);
+		break;
 	}
 }
 
 void mce_intel_feature_init(struct cpuinfo_x86 *c)
 {
-	intel_init_thermal(c);
 	intel_init_cmci();
 	intel_init_lmce();
 	intel_ppin_init(c);
+	intel_imc_init(c);
 }
 
 void mce_intel_feature_clear(struct cpuinfo_x86 *c)
 {
 	intel_clear_lmce();
+}
+
+bool intel_filter_mce(struct mce *m)
+{
+	struct cpuinfo_x86 *c = &boot_cpu_data;
+
+	/* MCE errata HSD131, HSM142, HSW131, BDM48, HSM142 and SKX37 */
+	if ((c->x86 == 6) &&
+	    ((c->x86_model == INTEL_FAM6_HASWELL) ||
+	     (c->x86_model == INTEL_FAM6_HASWELL_L) ||
+	     (c->x86_model == INTEL_FAM6_BROADWELL) ||
+	     (c->x86_model == INTEL_FAM6_HASWELL_G) ||
+	     (c->x86_model == INTEL_FAM6_SKYLAKE_X)) &&
+	    (m->bank == 0) &&
+	    ((m->status & 0xa0000000ffffffff) == 0x80000000000f0005))
+		return true;
+
+	return false;
 }

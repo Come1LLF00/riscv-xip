@@ -499,7 +499,7 @@ static int bdisp_start_streaming(struct vb2_queue *q, unsigned int count)
 {
 	struct bdisp_ctx *ctx = q->drv_priv;
 	struct vb2_v4l2_buffer *buf;
-	int ret = pm_runtime_get_sync(ctx->bdisp_dev->dev);
+	int ret = pm_runtime_resume_and_get(ctx->bdisp_dev->dev);
 
 	if (ret < 0) {
 		dev_err(ctx->bdisp_dev->dev, "failed to set runtime PM\n");
@@ -1066,7 +1066,7 @@ static int bdisp_register_device(struct bdisp_dev *bdisp)
 		return PTR_ERR(bdisp->m2m.m2m_dev);
 	}
 
-	ret = video_register_device(&bdisp->vdev, VFL_TYPE_GRABBER, -1);
+	ret = video_register_device(&bdisp->vdev, VFL_TYPE_VIDEO, -1);
 	if (ret) {
 		dev_err(bdisp->dev,
 			"%s(): failed to register video device\n", __func__);
@@ -1315,10 +1315,8 @@ static int bdisp_probe(struct platform_device *pdev)
 	mutex_init(&bdisp->lock);
 
 	/* get resources */
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	bdisp->regs = devm_ioremap_resource(dev, res);
+	bdisp->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(bdisp->regs)) {
-		dev_err(dev, "failed to get regs\n");
 		ret = PTR_ERR(bdisp->regs);
 		goto err_wq;
 	}
@@ -1360,18 +1358,14 @@ static int bdisp_probe(struct platform_device *pdev)
 	}
 
 	/* Debug */
-	ret = bdisp_debugfs_create(bdisp);
-	if (ret) {
-		dev_err(dev, "failed to create debugfs\n");
-		goto err_v4l2;
-	}
+	bdisp_debugfs_create(bdisp);
 
 	/* Power management */
 	pm_runtime_enable(dev);
-	ret = pm_runtime_get_sync(dev);
+	ret = pm_runtime_resume_and_get(dev);
 	if (ret < 0) {
 		dev_err(dev, "failed to set PM\n");
-		goto err_dbg;
+		goto err_remove;
 	}
 
 	/* Filters */
@@ -1399,9 +1393,9 @@ err_filter:
 	bdisp_hw_free_filters(bdisp->dev);
 err_pm:
 	pm_runtime_put(dev);
-err_dbg:
+err_remove:
+	pm_runtime_disable(dev);
 	bdisp_debugfs_remove(bdisp);
-err_v4l2:
 	v4l2_device_unregister(&bdisp->v4l2_dev);
 err_clk:
 	if (!IS_ERR(bdisp->clock))

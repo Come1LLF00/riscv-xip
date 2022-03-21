@@ -107,6 +107,7 @@ int __i915_subtests(const char *caller,
 
 #define I915_SELFTEST_DECLARE(x) x
 #define I915_SELFTEST_ONLY(x) unlikely(x)
+#define I915_SELFTEST_EXPORT
 
 #else /* !IS_ENABLED(CONFIG_DRM_I915_SELFTEST) */
 
@@ -116,6 +117,7 @@ static inline int i915_perf_selftests(struct pci_dev *pdev) { return 0; }
 
 #define I915_SELFTEST_DECLARE(x)
 #define I915_SELFTEST_ONLY(x) 0
+#define I915_SELFTEST_EXPORT static
 
 #endif
 
@@ -132,5 +134,7 @@ bool __igt_timeout(unsigned long timeout, const char *fmt, ...);
 
 #define igt_timeout(t, fmt, ...) \
 	__igt_timeout((t), KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__)
+
+void igt_hexdump(const void *buf, size_t len);
 
 #endif /* !__I915_SELFTEST_H__ */

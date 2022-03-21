@@ -42,14 +42,18 @@
  * Post-requisites: headers required by this unit
  */
 
+#if defined(CONFIG_DRM_AMD_DC_SI)
+#include "dce60/hw_factory_dce60.h"
+#endif
 #include "dce80/hw_factory_dce80.h"
 #include "dce110/hw_factory_dce110.h"
 #include "dce120/hw_factory_dce120.h"
 #if defined(CONFIG_DRM_AMD_DC_DCN)
 #include "dcn10/hw_factory_dcn10.h"
-#endif
 #include "dcn20/hw_factory_dcn20.h"
 #include "dcn21/hw_factory_dcn21.h"
+#include "dcn30/hw_factory_dcn30.h"
+#endif
 
 #include "diagnostics/hw_factory_diag.h"
 
@@ -68,6 +72,13 @@ bool dal_hw_factory_init(
 	}
 
 	switch (dce_version) {
+#if defined(CONFIG_DRM_AMD_DC_SI)
+	case DCE_VERSION_6_0:
+	case DCE_VERSION_6_1:
+	case DCE_VERSION_6_4:
+		dal_hw_factory_dce60_init(factory);
+		return true;
+#endif
 	case DCE_VERSION_8_0:
 	case DCE_VERSION_8_1:
 	case DCE_VERSION_8_3:
@@ -91,31 +102,23 @@ bool dal_hw_factory_init(
 	case DCN_VERSION_1_01:
 		dal_hw_factory_dcn10_init(factory);
 		return true;
-
 	case DCN_VERSION_2_0:
 		dal_hw_factory_dcn20_init(factory);
 		return true;
+	case DCN_VERSION_2_01:
 	case DCN_VERSION_2_1:
 		dal_hw_factory_dcn21_init(factory);
 		return true;
+	case DCN_VERSION_3_0:
+	case DCN_VERSION_3_01:
+	case DCN_VERSION_3_02:
+	case DCN_VERSION_3_03:
+	case DCN_VERSION_3_1:
+		dal_hw_factory_dcn30_init(factory);
+		return true;
 #endif
-
 	default:
 		ASSERT_CRITICAL(false);
 		return false;
 	}
-}
-
-void dal_hw_factory_destroy(
-	struct dc_context *ctx,
-	struct hw_factory **factory)
-{
-	if (!factory || !*factory) {
-		BREAK_TO_DEBUGGER();
-		return;
-	}
-
-	kfree(*factory);
-
-	*factory = NULL;
 }

@@ -145,6 +145,13 @@ static inline void hlist_nulls_add_tail_rcu(struct hlist_nulls_node *n,
 	}
 }
 
+/* after that hlist_nulls_del will work */
+static inline void hlist_nulls_add_fake(struct hlist_nulls_node *n)
+{
+	n->pprev = &n->next;
+	n->next = (struct hlist_nulls_node *)NULLS_MARKER(NULL);
+}
+
 /**
  * hlist_nulls_for_each_entry_rcu - iterate over rcu list of given type
  * @tpos:	the type * to use as a loop cursor.
@@ -154,8 +161,8 @@ static inline void hlist_nulls_add_tail_rcu(struct hlist_nulls_node *n,
  *
  * The barrier() is needed to make sure compiler doesn't cache first element [1],
  * as this loop can be restarted [2]
- * [1] Documentation/core-api/atomic_ops.rst around line 114
- * [2] Documentation/RCU/rculist_nulls.txt around line 146
+ * [1] Documentation/memory-barriers.txt around line 1533
+ * [2] Documentation/RCU/rculist_nulls.rst around line 146
  */
 #define hlist_nulls_for_each_entry_rcu(tpos, pos, head, member)			\
 	for (({barrier();}),							\

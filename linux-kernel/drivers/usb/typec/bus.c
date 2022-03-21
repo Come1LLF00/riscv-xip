@@ -9,6 +9,8 @@
 #include <linux/usb/pd_vdo.h>
 
 #include "bus.h"
+#include "class.h"
+#include "mux.h"
 
 static inline int
 typec_altmode_set_mux(struct altmode *alt, unsigned long conf, void *data)
@@ -30,17 +32,10 @@ static int typec_altmode_set_state(struct typec_altmode *adev,
 {
 	bool is_port = is_typec_port(adev->dev.parent);
 	struct altmode *port_altmode;
-	int ret;
 
 	port_altmode = is_port ? to_altmode(adev) : to_altmode(adev)->partner;
 
-	ret = typec_altmode_set_mux(port_altmode, conf, data);
-	if (ret)
-		return ret;
-
-	blocking_notifier_call_chain(&port_altmode->nh, conf, NULL);
-
-	return 0;
+	return typec_altmode_set_mux(port_altmode, conf, data);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -81,9 +76,6 @@ int typec_altmode_notify(struct typec_altmode *adev,
 	ret = typec_altmode_set_mux(is_port ? altmode : partner, conf, data);
 	if (ret)
 		return ret;
-
-	blocking_notifier_call_chain(is_port ? &altmode->nh : &partner->nh,
-				     conf, data);
 
 	if (partner->adev.ops && partner->adev.ops->notify)
 		return partner->adev.ops->notify(&partner->adev, conf, data);
@@ -208,7 +200,10 @@ EXPORT_SYMBOL_GPL(typec_altmode_vdm);
 const struct typec_altmode *
 typec_altmode_get_partner(struct typec_altmode *adev)
 {
-	return adev ? &to_altmode(adev)->partner->adev : NULL;
+	if (!adev || !to_altmode(adev)->partner)
+		return NULL;
+
+	return &to_altmode(adev)->partner->adev;
 }
 EXPORT_SYMBOL_GPL(typec_altmode_get_partner);
 
@@ -387,7 +382,7 @@ static int typec_probe(struct device *dev)
 	return ret;
 }
 
-static int typec_remove(struct device *dev)
+static void typec_remove(struct device *dev)
 {
 	struct typec_altmode_driver *drv = to_altmode_driver(dev->driver);
 	struct typec_altmode *adev = to_typec_altmode(dev);
@@ -405,8 +400,6 @@ static int typec_remove(struct device *dev)
 
 	adev->desc = NULL;
 	adev->ops = NULL;
-
-	return 0;
 }
 
 struct bus_type typec_bus = {

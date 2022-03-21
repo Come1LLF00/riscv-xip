@@ -15,14 +15,15 @@
 
 struct intel_guc;
 
-#ifdef CONFIG_DRM_I915_DEBUG_GUC
+#if defined(CONFIG_DRM_I915_DEBUG_GUC)
 #define CRASH_BUFFER_SIZE	SZ_2M
-#define DPC_BUFFER_SIZE		SZ_8M
-#define ISR_BUFFER_SIZE		SZ_8M
+#define DEBUG_BUFFER_SIZE	SZ_16M
+#elif defined(CONFIG_DRM_I915_DEBUG_GEM)
+#define CRASH_BUFFER_SIZE	SZ_1M
+#define DEBUG_BUFFER_SIZE	SZ_2M
 #else
 #define CRASH_BUFFER_SIZE	SZ_8K
-#define DPC_BUFFER_SIZE		SZ_32K
-#define ISR_BUFFER_SIZE		SZ_32K
+#define DEBUG_BUFFER_SIZE	SZ_64K
 #endif
 
 /*
@@ -78,5 +79,9 @@ static inline u32 intel_guc_log_get_level(struct intel_guc_log *log)
 {
 	return log->level;
 }
+
+void intel_guc_log_info(struct intel_guc_log *log, struct drm_printer *p);
+int intel_guc_log_dump(struct intel_guc_log *log, struct drm_printer *p,
+		       bool dump_load_err);
 
 #endif

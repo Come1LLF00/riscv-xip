@@ -290,7 +290,7 @@ static int pcm3168a_reset(struct pcm3168a_priv *pcm3168a)
 			PCM3168A_MRST_MASK | PCM3168A_SRST_MASK);
 }
 
-static int pcm3168a_digital_mute(struct snd_soc_dai *dai, int mute)
+static int pcm3168a_mute(struct snd_soc_dai *dai, int mute, int direction)
 {
 	struct snd_soc_component *component = dai->component;
 	struct pcm3168a_priv *pcm3168a = snd_soc_component_get_drvdata(component);
@@ -305,6 +305,13 @@ static int pcm3168a_set_dai_sysclk(struct snd_soc_dai *dai,
 {
 	struct pcm3168a_priv *pcm3168a = snd_soc_component_get_drvdata(dai->component);
 	int ret;
+
+	/*
+	 * Some sound card sets 0 Hz as reset,
+	 * but it is impossible to set. Ignore it here
+	 */
+	if (freq == 0)
+		return 0;
 
 	if (freq > PCM3168A_MAX_SYSCLK)
 		return -EINVAL;
@@ -566,12 +573,39 @@ static int pcm3168a_hw_params(struct snd_pcm_substream *substream,
 	return 0;
 }
 
+static u64 pcm3168a_dai_formats[] = {
+	/*
+	 * Select below from Sound Card, not here
+	 *	SND_SOC_DAIFMT_CBC_CFC
+	 *	SND_SOC_DAIFMT_CBP_CFP
+	 */
+
+	/*
+	 * First Priority
+	 */
+	SND_SOC_POSSIBLE_DAIFMT_I2S	|
+	SND_SOC_POSSIBLE_DAIFMT_LEFT_J,
+	/*
+	 * Second Priority
+	 *
+	 * These have picky limitation.
+	 * see
+	 *	pcm3168a_hw_params()
+	 */
+	SND_SOC_POSSIBLE_DAIFMT_RIGHT_J	|
+	SND_SOC_POSSIBLE_DAIFMT_DSP_A	|
+	SND_SOC_POSSIBLE_DAIFMT_DSP_B,
+};
+
 static const struct snd_soc_dai_ops pcm3168a_dai_ops = {
 	.set_fmt	= pcm3168a_set_dai_fmt,
 	.set_sysclk	= pcm3168a_set_dai_sysclk,
 	.hw_params	= pcm3168a_hw_params,
-	.digital_mute	= pcm3168a_digital_mute,
+	.mute_stream	= pcm3168a_mute,
 	.set_tdm_slot	= pcm3168a_set_tdm_slot,
+	.no_capture_mute = 1,
+	.auto_selectable_formats	= pcm3168a_dai_formats,
+	.num_auto_selectable_formats	= ARRAY_SIZE(pcm3168a_dai_formats),
 };
 
 static struct snd_soc_dai_driver pcm3168a_dais[] = {
@@ -717,21 +751,14 @@ int pcm3168a_probe(struct device *dev, struct regmap *regmap)
 	pcm3168a->gpio_rst = devm_gpiod_get_optional(dev, "reset",
 						GPIOD_OUT_LOW |
 						GPIOD_FLAGS_BIT_NONEXCLUSIVE);
-	if (IS_ERR(pcm3168a->gpio_rst)) {
-		ret = PTR_ERR(pcm3168a->gpio_rst);
-		if (ret != -EPROBE_DEFER )
-			dev_err(dev, "failed to acquire RST gpio: %d\n", ret);
-
-		return ret;
-	}
+	if (IS_ERR(pcm3168a->gpio_rst))
+		return dev_err_probe(dev, PTR_ERR(pcm3168a->gpio_rst),
+				     "failed to acquire RST gpio\n");
 
 	pcm3168a->scki = devm_clk_get(dev, "scki");
-	if (IS_ERR(pcm3168a->scki)) {
-		ret = PTR_ERR(pcm3168a->scki);
-		if (ret != -EPROBE_DEFER)
-			dev_err(dev, "failed to acquire clock 'scki': %d\n", ret);
-		return ret;
-	}
+	if (IS_ERR(pcm3168a->scki))
+		return dev_err_probe(dev, PTR_ERR(pcm3168a->scki),
+				     "failed to acquire clock 'scki'\n");
 
 	ret = clk_prepare_enable(pcm3168a->scki);
 	if (ret) {
@@ -747,8 +774,7 @@ int pcm3168a_probe(struct device *dev, struct regmap *regmap)
 	ret = devm_regulator_bulk_get(dev,
 			ARRAY_SIZE(pcm3168a->supplies), pcm3168a->supplies);
 	if (ret) {
-		if (ret != -EPROBE_DEFER)
-			dev_err(dev, "failed to request supplies: %d\n", ret);
+		dev_err_probe(dev, ret, "failed to request supplies\n");
 		goto err_clk;
 	}
 

@@ -5,7 +5,7 @@
  * Copyright (C) 2011 Texas Instruments, Inc.
  *	Santosh Shilimkar <santosh.shilimkar@ti.com>
  * Copyright (C) 2012 Ivaylo Dimitrov <freemangordon@abv.bg>
- * Copyright (C) 2013 Pali Rohár <pali.rohar@gmail.com>
+ * Copyright (C) 2013 Pali Rohár <pali@kernel.org>
  */
 #ifndef OMAP_ARCH_OMAP_SECURE_H
 #define OMAP_ARCH_OMAP_SECURE_H
@@ -50,6 +50,7 @@
 #define OMAP5_DRA7_MON_SET_ACR_INDEX	0x107
 
 /* Secure PPA(Primary Protected Application) APIs */
+#define OMAP4_PPA_SERVICE_0		0x21
 #define OMAP4_PPA_L2_POR_INDEX		0x23
 #define OMAP4_PPA_CPU_ACTRL_SMP_INDEX	0x25
 

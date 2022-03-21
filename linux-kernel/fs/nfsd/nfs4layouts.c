@@ -145,8 +145,9 @@ void nfsd4_setup_layout_type(struct svc_export *exp)
 #ifdef CONFIG_NFSD_SCSILAYOUT
 	if (sb->s_export_op->map_blocks &&
 	    sb->s_export_op->commit_blocks &&
-	    sb->s_bdev && sb->s_bdev->bd_disk->fops->pr_ops &&
-		blk_queue_scsi_passthrough(sb->s_bdev->bd_disk->queue))
+	    sb->s_bdev &&
+	    sb->s_bdev->bd_disk->fops->pr_ops &&
+	    sb->s_bdev->bd_disk->fops->get_unique_id)
 		exp->ex_layout_types |= 1 << LAYOUT_SCSI;
 #endif
 }
@@ -681,7 +682,7 @@ nfsd4_cb_layout_done(struct nfsd4_callback *cb, struct rpc_task *task)
 			rpc_delay(task, HZ/100); /* 10 mili-seconds */
 			return 0;
 		}
-		/* Fallthrough */
+		fallthrough;
 	default:
 		/*
 		 * Unknown error or non-responding client, we'll need to fence.

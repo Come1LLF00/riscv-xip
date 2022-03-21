@@ -99,7 +99,7 @@ static int vpif_buffer_prepare(struct vb2_buffer *vb)
  * vpif_buffer_queue_setup : Callback function for buffer setup.
  * @vq: vb2_queue ptr
  * @nbuffers: ptr to number of buffers requested by application
- * @nplanes:: contains number of distinct video planes needed to hold a frame
+ * @nplanes: contains number of distinct video planes needed to hold a frame
  * @sizes: contains the size (in bytes) of each plane.
  * @alloc_devs: ptr to allocation context
  *
@@ -616,17 +616,6 @@ static void vpif_calculate_offsets(struct channel_obj *ch)
 	}
 
 	ch->vpifparams.video_params.stdid = vpifparams->std_info.stdid;
-}
-
-/**
- * vpif_get_default_field() - Get default field type based on interface
- * @iface: ptr to vpif interface
- */
-static inline enum v4l2_field vpif_get_default_field(
-				struct vpif_interface *iface)
-{
-	return (iface->if_type == VPIF_IF_RAW_BAYER) ? V4L2_FIELD_NONE :
-						V4L2_FIELD_INTERLACED;
 }
 
 /**
@@ -1466,7 +1455,7 @@ static int vpif_probe_complete(void)
 		vdev->device_caps = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
 		video_set_drvdata(&ch->video_dev, ch);
 		err = video_register_device(vdev,
-					    VFL_TYPE_GRABBER, (j ? 1 : 0));
+					    VFL_TYPE_VIDEO, (j ? 1 : 0));
 		if (err)
 			goto probe_out;
 	}
@@ -1478,12 +1467,9 @@ probe_out:
 	for (k = 0; k < j; k++) {
 		/* Get the pointer to the channel object */
 		ch = vpif_obj.dev[k];
-		common = &ch->common[k];
 		/* Unregister video device */
 		video_unregister_device(&ch->video_dev);
 	}
-	kfree(vpif_obj.sd);
-	v4l2_device_unregister(&vpif_obj.v4l2_dev);
 
 	return err;
 }
@@ -1508,7 +1494,7 @@ vpif_capture_get_pdata(struct platform_device *pdev)
 	struct vpif_capture_chan_config *chan;
 	unsigned int i;
 
-	v4l2_async_notifier_init(&vpif_obj.notifier);
+	v4l2_async_nf_init(&vpif_obj.notifier);
 
 	/*
 	 * DT boot: OF node from parent device contains
@@ -1584,9 +1570,10 @@ vpif_capture_get_pdata(struct platform_device *pdev)
 		dev_dbg(&pdev->dev, "Remote device %pOF found\n", rem);
 		sdinfo->name = rem->full_name;
 
-		pdata->asd[i] = v4l2_async_notifier_add_fwnode_subdev(
-			&vpif_obj.notifier, of_fwnode_handle(rem),
-			sizeof(struct v4l2_async_subdev));
+		pdata->asd[i] = v4l2_async_nf_add_fwnode(&vpif_obj.notifier,
+							 of_fwnode_handle(rem),
+							 struct
+							 v4l2_async_subdev);
 		if (IS_ERR(pdata->asd[i]))
 			goto err_cleanup;
 
@@ -1604,7 +1591,7 @@ done:
 err_cleanup:
 	of_node_put(rem);
 	of_node_put(endpoint);
-	v4l2_async_notifier_cleanup(&vpif_obj.notifier);
+	v4l2_async_nf_cleanup(&vpif_obj.notifier);
 
 	return NULL;
 }
@@ -1694,8 +1681,8 @@ static __init int vpif_probe(struct platform_device *pdev)
 			goto probe_subdev_out;
 	} else {
 		vpif_obj.notifier.ops = &vpif_async_ops;
-		err = v4l2_async_notifier_register(&vpif_obj.v4l2_dev,
-						   &vpif_obj.notifier);
+		err = v4l2_async_nf_register(&vpif_obj.v4l2_dev,
+					     &vpif_obj.notifier);
 		if (err) {
 			vpif_err("Error registering async notifier\n");
 			err = -EINVAL;
@@ -1713,7 +1700,7 @@ vpif_unregister:
 vpif_free:
 	free_vpif_objs();
 cleanup:
-	v4l2_async_notifier_cleanup(&vpif_obj.notifier);
+	v4l2_async_nf_cleanup(&vpif_obj.notifier);
 
 	return err;
 }
@@ -1729,8 +1716,8 @@ static int vpif_remove(struct platform_device *device)
 	struct channel_obj *ch;
 	int i;
 
-	v4l2_async_notifier_unregister(&vpif_obj.notifier);
-	v4l2_async_notifier_cleanup(&vpif_obj.notifier);
+	v4l2_async_nf_unregister(&vpif_obj.notifier);
+	v4l2_async_nf_cleanup(&vpif_obj.notifier);
 	v4l2_device_unregister(&vpif_obj.v4l2_dev);
 
 	kfree(vpif_obj.sd);

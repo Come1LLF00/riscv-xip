@@ -2,14 +2,16 @@
 /*
  * SDIO interface.
  *
- * Copyright (c) 2017-2019, Silicon Laboratories, Inc.
+ * Copyright (c) 2017-2020, Silicon Laboratories, Inc.
  * Copyright (c) 2010, ST-Ericsson
  */
 #include <linux/module.h>
+#include <linux/mmc/sdio.h>
 #include <linux/mmc/sdio_func.h>
 #include <linux/mmc/card.h>
 #include <linux/interrupt.h>
 #include <linux/of_irq.h>
+#include <linux/irq.h>
 
 #include "bus.h"
 #include "wfx.h"
@@ -65,7 +67,7 @@ static int wfx_sdio_copy_to_io(void *priv, unsigned int reg_id,
 	/* Use queue mode buffers */
 	if (reg_id == WFX_REG_IN_OUT_QUEUE)
 		sdio_addr |= bus->buf_id_tx << 7;
-	// FIXME: discards 'const' qualifier for src
+	/* FIXME: discards 'const' qualifier for src */
 	ret = sdio_memcpy_toio(bus->func, sdio_addr, (void *)src, count);
 	if (!ret && reg_id == WFX_REG_IN_OUT_QUEUE)
 		bus->buf_id_tx = (bus->buf_id_tx + 1) % 32;
@@ -91,53 +93,61 @@ static void wfx_sdio_irq_handler(struct sdio_func *func)
 {
 	struct wfx_sdio_priv *bus = sdio_get_drvdata(func);
 
-	if (bus->core)
-		wfx_bh_request_rx(bus->core);
-	else
-		WARN(!bus->core, "race condition in driver init/deinit");
+	wfx_bh_request_rx(bus->core);
 }
 
 static irqreturn_t wfx_sdio_irq_handler_ext(int irq, void *priv)
 {
 	struct wfx_sdio_priv *bus = priv;
 
-	if (!bus->core) {
-		WARN(!bus->core, "race condition in driver init/deinit");
-		return IRQ_NONE;
-	}
 	sdio_claim_host(bus->func);
 	wfx_bh_request_rx(bus->core);
 	sdio_release_host(bus->func);
 	return IRQ_HANDLED;
 }
 
-static int wfx_sdio_irq_subscribe(struct wfx_sdio_priv *bus)
+static int wfx_sdio_irq_subscribe(void *priv)
 {
+	struct wfx_sdio_priv *bus = priv;
+	u32 flags;
 	int ret;
+	u8 cccr;
 
-	if (bus->of_irq) {
-		ret = request_irq(bus->of_irq, wfx_sdio_irq_handler_ext,
-				  IRQF_TRIGGER_RISING, "wfx", bus);
-	} else {
+	if (!bus->of_irq) {
 		sdio_claim_host(bus->func);
 		ret = sdio_claim_irq(bus->func, wfx_sdio_irq_handler);
 		sdio_release_host(bus->func);
+		return ret;
 	}
-	return ret;
+
+	flags = irq_get_trigger_type(bus->of_irq);
+	if (!flags)
+		flags = IRQF_TRIGGER_HIGH;
+	flags |= IRQF_ONESHOT;
+	ret = devm_request_threaded_irq(&bus->func->dev, bus->of_irq, NULL,
+					wfx_sdio_irq_handler_ext, flags,
+					"wfx", bus);
+	if (ret)
+		return ret;
+	sdio_claim_host(bus->func);
+	cccr = sdio_f0_readb(bus->func, SDIO_CCCR_IENx, NULL);
+	cccr |= BIT(0);
+	cccr |= BIT(bus->func->num);
+	sdio_f0_writeb(bus->func, cccr, SDIO_CCCR_IENx, NULL);
+	sdio_release_host(bus->func);
+	return 0;
 }
 
-static int wfx_sdio_irq_unsubscribe(struct wfx_sdio_priv *bus)
+static int wfx_sdio_irq_unsubscribe(void *priv)
 {
+	struct wfx_sdio_priv *bus = priv;
 	int ret;
 
-	if (bus->of_irq) {
-		free_irq(bus->of_irq, bus);
-		ret = 0;
-	} else {
-		sdio_claim_host(bus->func);
-		ret = sdio_release_irq(bus->func);
-		sdio_release_host(bus->func);
-	}
+	if (bus->of_irq)
+		devm_free_irq(&bus->func->dev, bus->of_irq, bus);
+	sdio_claim_host(bus->func);
+	ret = sdio_release_irq(bus->func);
+	sdio_release_host(bus->func);
 	return ret;
 }
 
@@ -151,12 +161,20 @@ static size_t wfx_sdio_align_size(void *priv, size_t size)
 static const struct hwbus_ops wfx_sdio_hwbus_ops = {
 	.copy_from_io = wfx_sdio_copy_from_io,
 	.copy_to_io = wfx_sdio_copy_to_io,
+	.irq_subscribe = wfx_sdio_irq_subscribe,
+	.irq_unsubscribe = wfx_sdio_irq_unsubscribe,
 	.lock			= wfx_sdio_lock,
 	.unlock			= wfx_sdio_unlock,
 	.align_size		= wfx_sdio_align_size,
 };
 
-static const struct of_device_id wfx_sdio_of_match[];
+static const struct of_device_id wfx_sdio_of_match[] = {
+	{ .compatible = "silabs,wfx-sdio" },
+	{ .compatible = "silabs,wf200" },
+	{ },
+};
+MODULE_DEVICE_TABLE(of, wfx_sdio_of_match);
+
 static int wfx_sdio_probe(struct sdio_func *func,
 			  const struct sdio_device_id *id)
 {
@@ -165,7 +183,8 @@ static int wfx_sdio_probe(struct sdio_func *func,
 	int ret;
 
 	if (func->num != 1) {
-		dev_err(&func->dev, "SDIO function number is %d while it should always be 1 (unsupported chip?)\n", func->num);
+		dev_err(&func->dev, "SDIO function number is %d while it should always be 1 (unsupported chip?)\n",
+			func->num);
 		return -ENODEV;
 	}
 
@@ -182,7 +201,7 @@ static int wfx_sdio_probe(struct sdio_func *func,
 	} else {
 		dev_warn(&func->dev,
 			 "device is not declared in DT, features will be limited\n");
-		// FIXME: ignore VID/PID and only rely on device tree
+		/* FIXME: ignore VID/PID and only rely on device tree */
 		// return -ENODEV;
 	}
 
@@ -194,33 +213,25 @@ static int wfx_sdio_probe(struct sdio_func *func,
 
 	sdio_claim_host(func);
 	ret = sdio_enable_func(func);
-	// Block of 64 bytes is more efficient than 512B for frame sizes < 4k
+	/* Block of 64 bytes is more efficient than 512B for frame sizes < 4k */
 	sdio_set_block_size(func, 64);
 	sdio_release_host(func);
 	if (ret)
 		goto err0;
 
-	ret = wfx_sdio_irq_subscribe(bus);
-	if (ret)
-		goto err1;
-
 	bus->core = wfx_init_common(&func->dev, &wfx_sdio_pdata,
 				    &wfx_sdio_hwbus_ops, bus);
 	if (!bus->core) {
 		ret = -EIO;
-		goto err2;
+		goto err1;
 	}
 
 	ret = wfx_probe(bus->core);
 	if (ret)
-		goto err3;
+		goto err1;
 
 	return 0;
 
-err3:
-	wfx_free_common(bus->core);
-err2:
-	wfx_sdio_irq_unsubscribe(bus);
 err1:
 	sdio_claim_host(func);
 	sdio_disable_func(func);
@@ -234,8 +245,6 @@ static void wfx_sdio_remove(struct sdio_func *func)
 	struct wfx_sdio_priv *bus = sdio_get_drvdata(func);
 
 	wfx_release(bus->core);
-	wfx_free_common(bus->core);
-	wfx_sdio_irq_unsubscribe(bus);
 	sdio_claim_host(func);
 	sdio_disable_func(func);
 	sdio_release_host(func);
@@ -245,19 +254,11 @@ static void wfx_sdio_remove(struct sdio_func *func)
 #define SDIO_DEVICE_ID_SILABS_WF200  0x1000
 static const struct sdio_device_id wfx_sdio_ids[] = {
 	{ SDIO_DEVICE(SDIO_VENDOR_ID_SILABS, SDIO_DEVICE_ID_SILABS_WF200) },
-	// FIXME: ignore VID/PID and only rely on device tree
+	/* FIXME: ignore VID/PID and only rely on device tree */
 	// { SDIO_DEVICE(SDIO_ANY_ID, SDIO_ANY_ID) },
 	{ },
 };
 MODULE_DEVICE_TABLE(sdio, wfx_sdio_ids);
-
-#ifdef CONFIG_OF
-static const struct of_device_id wfx_sdio_of_match[] = {
-	{ .compatible = "silabs,wfx-sdio" },
-	{ },
-};
-MODULE_DEVICE_TABLE(of, wfx_sdio_of_match);
-#endif
 
 struct sdio_driver wfx_sdio_driver = {
 	.name = "wfx-sdio",
@@ -266,6 +267,6 @@ struct sdio_driver wfx_sdio_driver = {
 	.remove = wfx_sdio_remove,
 	.drv = {
 		.owner = THIS_MODULE,
-		.of_match_table = of_match_ptr(wfx_sdio_of_match),
+		.of_match_table = wfx_sdio_of_match,
 	}
 };

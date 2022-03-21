@@ -50,21 +50,29 @@ struct dpp;
 struct dce_hwseq;
 
 struct hw_sequencer_funcs {
+	void (*hardware_release)(struct dc *dc);
 	/* Embedded Display Related */
 	void (*edp_power_control)(struct dc_link *link, bool enable);
 	void (*edp_wait_for_hpd_ready)(struct dc_link *link, bool power_up);
+	void (*edp_wait_for_T12)(struct dc_link *link);
 
 	/* Pipe Programming Related */
 	void (*init_hw)(struct dc *dc);
+	void (*power_down_on_boot)(struct dc *dc);
 	void (*enable_accelerated_mode)(struct dc *dc,
 			struct dc_state *context);
 	enum dc_status (*apply_ctx_to_hw)(struct dc *dc,
 			struct dc_state *context);
 	void (*disable_plane)(struct dc *dc, struct pipe_ctx *pipe_ctx);
+	void (*disable_pixel_data)(struct dc *dc, struct pipe_ctx *pipe_ctx, bool blank);
 	void (*apply_ctx_for_surface)(struct dc *dc,
 			const struct dc_stream_state *stream,
 			int num_planes, struct dc_state *context);
 	void (*program_front_end_for_ctx)(struct dc *dc,
+			struct dc_state *context);
+	void (*wait_for_pending_cleared)(struct dc *dc,
+			struct dc_state *context);
+	void (*post_unlock_program_front_end)(struct dc *dc,
 			struct dc_state *context);
 	void (*update_plane_addr)(const struct dc *dc,
 			struct pipe_ctx *pipe_ctx);
@@ -73,36 +81,53 @@ struct hw_sequencer_funcs {
 	void (*wait_for_mpcc_disconnect)(struct dc *dc,
 			struct resource_pool *res_pool,
 			struct pipe_ctx *pipe_ctx);
+	void (*edp_backlight_control)(
+			struct dc_link *link,
+			bool enable);
 	void (*program_triplebuffer)(const struct dc *dc,
 		struct pipe_ctx *pipe_ctx, bool enableTripleBuffer);
 	void (*update_pending_status)(struct pipe_ctx *pipe_ctx);
+	void (*power_down)(struct dc *dc);
 
 	/* Pipe Lock Related */
-	void (*pipe_control_lock_global)(struct dc *dc,
-			struct pipe_ctx *pipe, bool lock);
 	void (*pipe_control_lock)(struct dc *dc,
 			struct pipe_ctx *pipe, bool lock);
+	void (*interdependent_update_lock)(struct dc *dc,
+			struct dc_state *context, bool lock);
 	void (*set_flip_control_gsl)(struct pipe_ctx *pipe_ctx,
 			bool flip_immediate);
+	void (*cursor_lock)(struct dc *dc, struct pipe_ctx *pipe, bool lock);
 
 	/* Timing Related */
 	void (*get_position)(struct pipe_ctx **pipe_ctx, int num_pipes,
 			struct crtc_position *position);
 	int (*get_vupdate_offset_from_vsync)(struct pipe_ctx *pipe_ctx);
+	void (*calc_vupdate_position)(
+			struct dc *dc,
+			struct pipe_ctx *pipe_ctx,
+			uint32_t *start_line,
+			uint32_t *end_line);
 	void (*enable_per_frame_crtc_position_reset)(struct dc *dc,
 			int group_size, struct pipe_ctx *grouped_pipes[]);
 	void (*enable_timing_synchronization)(struct dc *dc,
+			int group_index, int group_size,
+			struct pipe_ctx *grouped_pipes[]);
+	void (*enable_vblanks_synchronization)(struct dc *dc,
 			int group_index, int group_size,
 			struct pipe_ctx *grouped_pipes[]);
 	void (*setup_periodic_interrupt)(struct dc *dc,
 			struct pipe_ctx *pipe_ctx,
 			enum vline_select vline);
 	void (*set_drr)(struct pipe_ctx **pipe_ctx, int num_pipes,
-			unsigned int vmin, unsigned int vmax,
-			unsigned int vmid, unsigned int vmid_frame_number);
+			struct dc_crtc_timing_adjust adjust);
 	void (*set_static_screen_control)(struct pipe_ctx **pipe_ctx,
 			int num_pipes,
 			const struct dc_static_screen_params *events);
+#ifndef TRIM_FSFT
+	bool (*optimize_timing_for_fsft)(struct dc *dc,
+			struct dc_crtc_timing *timing,
+			unsigned int max_input_rate_in_khz);
+#endif
 
 	/* Stream Related */
 	void (*enable_stream)(struct pipe_ctx *pipe_ctx);
@@ -185,7 +210,40 @@ struct hw_sequencer_funcs {
 			unsigned int bufSize, unsigned int mask);
 	void (*clear_status_bits)(struct dc *dc, unsigned int mask);
 
+	bool (*set_backlight_level)(struct pipe_ctx *pipe_ctx,
+			uint32_t backlight_pwm_u16_16,
+			uint32_t frame_ramp);
 
+	void (*set_abm_immediate_disable)(struct pipe_ctx *pipe_ctx);
+
+	void (*set_pipe)(struct pipe_ctx *pipe_ctx);
+
+	void (*get_dcc_en_bits)(struct dc *dc, int *dcc_en_bits);
+
+	/* Idle Optimization Related */
+	bool (*apply_idle_power_optimizations)(struct dc *dc, bool enable);
+
+	bool (*does_plane_fit_in_mall)(struct dc *dc, struct dc_plane_state *plane,
+			struct dc_cursor_attributes *cursor_attr);
+
+	bool (*is_abm_supported)(struct dc *dc,
+			struct dc_state *context, struct dc_stream_state *stream);
+
+	void (*set_disp_pattern_generator)(const struct dc *dc,
+			struct pipe_ctx *pipe_ctx,
+			enum controller_dp_test_pattern test_pattern,
+			enum controller_dp_color_space color_space,
+			enum dc_color_depth color_depth,
+			const struct tg_color *solid_color,
+			int width, int height, int offset);
+
+	void (*z10_restore)(const struct dc *dc);
+	void (*z10_save_init)(struct dc *dc);
+
+	void (*update_visual_confirm_color)(struct dc *dc,
+			struct pipe_ctx *pipe_ctx,
+			struct tg_color *color,
+			int mpcc_id);
 };
 
 void color_space_to_black_color(
@@ -200,4 +258,17 @@ const uint16_t *find_color_matrix(
 		enum dc_color_space color_space,
 		uint32_t *array_size);
 
+void get_surface_visual_confirm_color(
+		const struct pipe_ctx *pipe_ctx,
+		struct tg_color *color);
+
+void get_hdr_visual_confirm_color(
+		struct pipe_ctx *pipe_ctx,
+		struct tg_color *color);
+void get_mpctree_visual_confirm_color(
+		struct pipe_ctx *pipe_ctx,
+		struct tg_color *color);
+void get_surface_tile_visual_confirm_color(
+		struct pipe_ctx *pipe_ctx,
+		struct tg_color *color);
 #endif /* __DC_HW_SEQUENCER_H__ */

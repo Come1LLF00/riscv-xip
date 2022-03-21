@@ -106,19 +106,8 @@ static int dpaa_set_link_ksettings(struct net_device *net_dev,
 static void dpaa_get_drvinfo(struct net_device *net_dev,
 			     struct ethtool_drvinfo *drvinfo)
 {
-	int len;
-
 	strlcpy(drvinfo->driver, KBUILD_MODNAME,
 		sizeof(drvinfo->driver));
-	len = snprintf(drvinfo->version, sizeof(drvinfo->version),
-		       "%X", 0);
-	len = snprintf(drvinfo->fw_version, sizeof(drvinfo->fw_version),
-		       "%X", 0);
-
-	if (len >= sizeof(drvinfo->fw_version)) {
-		/* Truncated output */
-		netdev_notice(net_dev, "snprintf() = %d\n", len);
-	}
 	strlcpy(drvinfo->bus_info, dev_name(net_dev->dev.parent->parent),
 		sizeof(drvinfo->bus_info));
 }
@@ -386,7 +375,7 @@ static int dpaa_get_hash_opts(struct net_device *dev,
 	case UDP_V6_FLOW:
 		if (priv->keygen_in_use)
 			cmd->data |= RXH_L4_B_0_1 | RXH_L4_B_2_3;
-		/* Fall through */
+		fallthrough;
 	case IPV4_FLOW:
 	case IPV6_FLOW:
 	case SCTP_V4_FLOW:
@@ -524,7 +513,9 @@ static int dpaa_get_ts_info(struct net_device *net_dev,
 }
 
 static int dpaa_get_coalesce(struct net_device *dev,
-			     struct ethtool_coalesce *c)
+			     struct ethtool_coalesce *c,
+			     struct kernel_ethtool_coalesce *kernel_coal,
+			     struct netlink_ext_ack *extack)
 {
 	struct qman_portal *portal;
 	u32 period;
@@ -536,13 +527,14 @@ static int dpaa_get_coalesce(struct net_device *dev,
 
 	c->rx_coalesce_usecs = period;
 	c->rx_max_coalesced_frames = thresh;
-	c->use_adaptive_rx_coalesce = false;
 
 	return 0;
 }
 
 static int dpaa_set_coalesce(struct net_device *dev,
-			     struct ethtool_coalesce *c)
+			     struct ethtool_coalesce *c,
+			     struct kernel_ethtool_coalesce *kernel_coal,
+			     struct netlink_ext_ack *extack)
 {
 	const cpumask_t *cpus = qman_affine_cpus();
 	bool needs_revert[NR_CPUS] = {false};
@@ -550,9 +542,6 @@ static int dpaa_set_coalesce(struct net_device *dev,
 	u32 period, prev_period;
 	u8 thresh, prev_thresh;
 	int cpu, res;
-
-	if (c->use_adaptive_rx_coalesce)
-		return -EINVAL;
 
 	period = c->rx_coalesce_usecs;
 	thresh = c->rx_max_coalesced_frames;
@@ -593,6 +582,8 @@ revert_values:
 }
 
 const struct ethtool_ops dpaa_ethtool_ops = {
+	.supported_coalesce_params = ETHTOOL_COALESCE_RX_USECS |
+				     ETHTOOL_COALESCE_RX_MAX_FRAMES,
 	.get_drvinfo = dpaa_get_drvinfo,
 	.get_msglevel = dpaa_get_msglevel,
 	.set_msglevel = dpaa_set_msglevel,

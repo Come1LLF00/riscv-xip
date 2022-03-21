@@ -27,10 +27,10 @@
 #define _DMUB_DC_SRV_H_
 
 #include "os_types.h"
-#include "../dmub/inc/dmub_cmd.h"
+#include "dmub/dmub_srv.h"
 
 struct dmub_srv;
-struct dmub_cmd_header;
+struct dc;
 
 struct dc_reg_helper_state {
 	bool gather_in_progress;
@@ -49,12 +49,31 @@ struct dc_dmub_srv {
 };
 
 void dc_dmub_srv_cmd_queue(struct dc_dmub_srv *dc_dmub_srv,
-			   struct dmub_cmd_header *cmd);
+			   union dmub_rb_cmd *cmd);
 
 void dc_dmub_srv_cmd_execute(struct dc_dmub_srv *dc_dmub_srv);
 
 void dc_dmub_srv_wait_idle(struct dc_dmub_srv *dc_dmub_srv);
 
 void dc_dmub_srv_wait_phy_init(struct dc_dmub_srv *dc_dmub_srv);
+
+bool dc_dmub_srv_cmd_with_reply_data(struct dc_dmub_srv *dc_dmub_srv, union dmub_rb_cmd *cmd);
+
+bool dc_dmub_srv_notify_stream_mask(struct dc_dmub_srv *dc_dmub_srv,
+				    unsigned int stream_mask);
+
+bool dc_dmub_srv_is_restore_required(struct dc_dmub_srv *dc_dmub_srv);
+
+bool dc_dmub_srv_get_dmub_outbox0_msg(const struct dc *dc, struct dmcub_trace_buf_entry *entry);
+
+void dc_dmub_trace_event_control(struct dc *dc, bool enable);
+
+void dc_dmub_srv_clear_inbox0_ack(struct dc_dmub_srv *dmub_srv);
+void dc_dmub_srv_wait_for_inbox0_ack(struct dc_dmub_srv *dmub_srv);
+void dc_dmub_srv_send_inbox0_cmd(struct dc_dmub_srv *dmub_srv, union dmub_inbox0_data_register data);
+
+bool dc_dmub_srv_get_diagnostic_data(struct dc_dmub_srv *dc_dmub_srv, struct dmub_diagnostic_data *dmub_oca);
+
+void dc_dmub_srv_log_diagnostic_data(struct dc_dmub_srv *dc_dmub_srv);
 
 #endif /* _DMUB_DC_SRV_H_ */

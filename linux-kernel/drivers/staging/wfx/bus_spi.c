@@ -2,16 +2,16 @@
 /*
  * SPI interface.
  *
- * Copyright (c) 2017-2019, Silicon Laboratories, Inc.
+ * Copyright (c) 2017-2020, Silicon Laboratories, Inc.
  * Copyright (c) 2011, Sagrad Inc.
  * Copyright (c) 2010, ST-Ericsson
  */
 #include <linux/module.h>
 #include <linux/delay.h>
-#include <linux/gpio.h>
 #include <linux/gpio/consumer.h>
 #include <linux/spi/spi.h>
 #include <linux/interrupt.h>
+#include <linux/irq.h>
 #include <linux/of.h>
 
 #include "bus.h"
@@ -20,12 +20,10 @@
 #include "main.h"
 #include "bh.h"
 
-static int gpio_reset = -2;
-module_param(gpio_reset, int, 0644);
-MODULE_PARM_DESC(gpio_reset, "gpio number for reset. -1 for none.");
-
 #define SET_WRITE 0x7FFF        /* usage: and operation */
 #define SET_READ 0x8000         /* usage: or operation */
+
+#define WFX_RESET_INVERTED 1
 
 static const struct wfx_platform_data wfx_spi_pdata = {
 	.file_fw = "wfm_wf200",
@@ -37,14 +35,12 @@ struct wfx_spi_priv {
 	struct spi_device *func;
 	struct wfx_dev *core;
 	struct gpio_desc *gpio_reset;
-	struct work_struct request_rx;
 	bool need_swab;
 };
 
-/*
- * WFx chip read data 16bits at time and place them directly into (little
- * endian) CPU register. So, chip expect byte order like "B1 B0 B3 B2" (while
- * LE is "B0 B1 B2 B3" and BE is "B3 B2 B1 B0")
+/* The chip reads 16bits of data at time and place them directly into (little
+ * endian) CPU register. So, the chip expects bytes order to be "B1 B0 B3 B2"
+ * (while LE is "B0 B1 B2 B3" and BE is "B3 B2 B1 B0")
  *
  * A little endian host with bits_per_word == 16 should do the right job
  * natively. The code below to support big endian host and commonly used SPI
@@ -89,7 +85,7 @@ static int wfx_spi_copy_to_io(void *priv, unsigned int addr,
 {
 	struct wfx_spi_priv *bus = priv;
 	u16 regaddr = (addr << 12) | (count / 2);
-	// FIXME: use a bounce buffer
+	/* FIXME: use a bounce buffer */
 	u16 *src16 = (void *)src;
 	int ret, i;
 	struct spi_message      m;
@@ -107,8 +103,9 @@ static int wfx_spi_copy_to_io(void *priv, unsigned int addr,
 
 	cpu_to_le16s(&regaddr);
 
-	// Register address and CONFIG content always use 16bit big endian
-	// ("BADC" order)
+	/* Register address and CONFIG content always use 16bit big endian
+	 * ("BADC" order)
+	 */
 	if (bus->need_swab)
 		swab16s(&regaddr);
 	if (bus->need_swab && addr == WFX_REG_CONFIG)
@@ -138,31 +135,44 @@ static irqreturn_t wfx_spi_irq_handler(int irq, void *priv)
 {
 	struct wfx_spi_priv *bus = priv;
 
-	if (!bus->core) {
-		WARN(!bus->core, "race condition in driver init/deinit");
-		return IRQ_NONE;
-	}
-	queue_work(system_highpri_wq, &bus->request_rx);
+	wfx_bh_request_rx(bus->core);
 	return IRQ_HANDLED;
 }
 
-static void wfx_spi_request_rx(struct work_struct *work)
+static int wfx_spi_irq_subscribe(void *priv)
 {
-	struct wfx_spi_priv *bus =
-		container_of(work, struct wfx_spi_priv, request_rx);
+	struct wfx_spi_priv *bus = priv;
+	u32 flags;
 
-	wfx_bh_request_rx(bus->core);
+	flags = irq_get_trigger_type(bus->func->irq);
+	if (!flags)
+		flags = IRQF_TRIGGER_HIGH;
+	flags |= IRQF_ONESHOT;
+	return devm_request_threaded_irq(&bus->func->dev, bus->func->irq, NULL,
+					 wfx_spi_irq_handler, IRQF_ONESHOT,
+					 "wfx", bus);
+}
+
+static int wfx_spi_irq_unsubscribe(void *priv)
+{
+	struct wfx_spi_priv *bus = priv;
+
+	devm_free_irq(&bus->func->dev, bus->func->irq, bus);
+	return 0;
 }
 
 static size_t wfx_spi_align_size(void *priv, size_t size)
 {
-	// Most of SPI controllers avoid DMA if buffer size is not 32bit aligned
+	/* Most of SPI controllers avoid DMA if buffer size is not 32bit aligned
+	 */
 	return ALIGN(size, 4);
 }
 
 static const struct hwbus_ops wfx_spi_hwbus_ops = {
 	.copy_from_io = wfx_spi_copy_from_io,
 	.copy_to_io = wfx_spi_copy_to_io,
+	.irq_subscribe = wfx_spi_irq_subscribe,
+	.irq_unsubscribe = wfx_spi_irq_unsubscribe,
 	.lock			= wfx_spi_lock,
 	.unlock			= wfx_spi_unlock,
 	.align_size		= wfx_spi_align_size,
@@ -178,7 +188,7 @@ static int wfx_spi_probe(struct spi_device *func)
 	ret = spi_setup(func);
 	if (ret)
 		return ret;
-	// Trace below is also displayed by spi_setup() if compiled with DEBUG
+	/* Trace below is also displayed by spi_setup() if compiled with DEBUG */
 	dev_dbg(&func->dev, "SPI params: CS=%d, mode=%d bits/word=%d speed=%d\n",
 		func->chip_select, func->mode, func->bits_per_word,
 		func->max_speed_hz);
@@ -197,32 +207,29 @@ static int wfx_spi_probe(struct spi_device *func)
 		bus->need_swab = true;
 	spi_set_drvdata(func, bus);
 
-	bus->gpio_reset = wfx_get_gpio(&func->dev, gpio_reset, "reset");
+	bus->gpio_reset = devm_gpiod_get_optional(&func->dev, "reset",
+						  GPIOD_OUT_LOW);
+	if (IS_ERR(bus->gpio_reset))
+		return PTR_ERR(bus->gpio_reset);
 	if (!bus->gpio_reset) {
-		dev_warn(&func->dev, "try to load firmware anyway\n");
+		dev_warn(&func->dev,
+			 "gpio reset is not defined, trying to load firmware anyway\n");
 	} else {
-		gpiod_set_value(bus->gpio_reset, 0);
-		udelay(100);
-		gpiod_set_value(bus->gpio_reset, 1);
-		udelay(2000);
+		gpiod_set_consumer_name(bus->gpio_reset, "wfx reset");
+		if (spi_get_device_id(func)->driver_data & WFX_RESET_INVERTED)
+			gpiod_toggle_active_low(bus->gpio_reset);
+		gpiod_set_value_cansleep(bus->gpio_reset, 1);
+		usleep_range(100, 150);
+		gpiod_set_value_cansleep(bus->gpio_reset, 0);
+		usleep_range(2000, 2500);
 	}
 
-	ret = devm_request_irq(&func->dev, func->irq, wfx_spi_irq_handler,
-			       IRQF_TRIGGER_RISING, "wfx", bus);
-	if (ret)
-		return ret;
-
-	INIT_WORK(&bus->request_rx, wfx_spi_request_rx);
 	bus->core = wfx_init_common(&func->dev, &wfx_spi_pdata,
 				    &wfx_spi_hwbus_ops, bus);
 	if (!bus->core)
 		return -EIO;
 
-	ret = wfx_probe(bus->core);
-	if (ret)
-		wfx_free_common(bus->core);
-
-	return ret;
+	return wfx_probe(bus->core);
 }
 
 static int wfx_spi_remove(struct spi_device *func)
@@ -230,28 +237,24 @@ static int wfx_spi_remove(struct spi_device *func)
 	struct wfx_spi_priv *bus = spi_get_drvdata(func);
 
 	wfx_release(bus->core);
-	wfx_free_common(bus->core);
-	// A few IRQ will be sent during device release. Hopefully, no IRQ
-	// should happen after wdev/wvif are released.
-	devm_free_irq(&func->dev, func->irq, bus);
-	flush_work(&bus->request_rx);
 	return 0;
 }
 
-/*
- * For dynamic driver binding, kernel does not use OF to match driver. It only
+/* For dynamic driver binding, kernel does not use OF to match driver. It only
  * use modalias and modalias is a copy of 'compatible' DT node with vendor
  * stripped.
  */
 static const struct spi_device_id wfx_spi_id[] = {
-	{ "wfx-spi", 0 },
+	{ "wfx-spi", WFX_RESET_INVERTED },
+	{ "wf200", 0 },
 	{ },
 };
 MODULE_DEVICE_TABLE(spi, wfx_spi_id);
 
 #ifdef CONFIG_OF
 static const struct of_device_id wfx_spi_of_match[] = {
-	{ .compatible = "silabs,wfx-spi" },
+	{ .compatible = "silabs,wfx-spi", .data = (void *)WFX_RESET_INVERTED },
+	{ .compatible = "silabs,wf200" },
 	{ },
 };
 MODULE_DEVICE_TABLE(of, wfx_spi_of_match);

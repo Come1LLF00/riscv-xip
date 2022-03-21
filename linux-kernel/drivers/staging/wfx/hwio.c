@@ -2,7 +2,7 @@
 /*
  * Low-level I/O functions.
  *
- * Copyright (c) 2017-2019, Silicon Laboratories, Inc.
+ * Copyright (c) 2017-2020, Silicon Laboratories, Inc.
  * Copyright (c) 2010, ST-Ericsson
  */
 #include <linux/kernel.h>
@@ -31,7 +31,7 @@ static int read32(struct wfx_dev *wdev, int reg, u32 *val)
 	int ret;
 	__le32 *tmp = kmalloc(sizeof(u32), GFP_KERNEL);
 
-	*val = ~0; // Never return undefined value
+	*val = ~0; /* Never return undefined value */
 	if (!tmp)
 		return -ENOMEM;
 	ret = wdev->hwbus_ops->copy_from_io(wdev->hwbus_priv, reg, tmp,
@@ -106,8 +106,8 @@ err:
 	return ret;
 }
 
-static int indirect_read(struct wfx_dev *wdev, int reg, u32 addr, void *buf,
-			 size_t len)
+static int indirect_read(struct wfx_dev *wdev, int reg, u32 addr,
+			 void *buf, size_t len)
 {
 	int ret;
 	int i;
@@ -142,7 +142,7 @@ static int indirect_read(struct wfx_dev *wdev, int reg, u32 addr, void *buf,
 			goto err;
 		if (!(cfg & prefetch))
 			break;
-		udelay(200);
+		usleep_range(200, 250);
 	}
 	if (i == 20) {
 		ret = -ETIMEDOUT;
@@ -153,7 +153,7 @@ static int indirect_read(struct wfx_dev *wdev, int reg, u32 addr, void *buf,
 
 err:
 	if (ret < 0)
-		memset(buf, 0xFF, len); // Never return undefined value
+		memset(buf, 0xFF, len); /* Never return undefined value */
 	return ret;
 }
 
@@ -195,8 +195,8 @@ static int indirect_write_locked(struct wfx_dev *wdev, int reg, u32 addr,
 	return ret;
 }
 
-static int indirect_read32_locked(struct wfx_dev *wdev, int reg, u32 addr,
-				  u32 *val)
+static int indirect_read32_locked(struct wfx_dev *wdev, int reg,
+				  u32 addr, u32 *val)
 {
 	int ret;
 	__le32 *tmp = kmalloc(sizeof(u32), GFP_KERNEL);
@@ -205,15 +205,15 @@ static int indirect_read32_locked(struct wfx_dev *wdev, int reg, u32 addr,
 		return -ENOMEM;
 	wdev->hwbus_ops->lock(wdev->hwbus_priv);
 	ret = indirect_read(wdev, reg, addr, tmp, sizeof(u32));
-	*val = cpu_to_le32(*tmp);
+	*val = le32_to_cpu(*tmp);
 	_trace_io_ind_read32(reg, addr, *val);
 	wdev->hwbus_ops->unlock(wdev->hwbus_priv);
 	kfree(tmp);
 	return ret;
 }
 
-static int indirect_write32_locked(struct wfx_dev *wdev, int reg, u32 addr,
-				   u32 val)
+static int indirect_write32_locked(struct wfx_dev *wdev, int reg,
+				   u32 addr, u32 val)
 {
 	int ret;
 	__le32 *tmp = kmalloc(sizeof(u32), GFP_KERNEL);
@@ -233,7 +233,7 @@ int wfx_data_read(struct wfx_dev *wdev, void *buf, size_t len)
 {
 	int ret;
 
-	WARN((long) buf & 3, "%s: unaligned buffer", __func__);
+	WARN((long)buf & 3, "%s: unaligned buffer", __func__);
 	wdev->hwbus_ops->lock(wdev->hwbus_priv);
 	ret = wdev->hwbus_ops->copy_from_io(wdev->hwbus_priv,
 					    WFX_REG_IN_OUT_QUEUE, buf, len);
@@ -249,7 +249,7 @@ int wfx_data_write(struct wfx_dev *wdev, const void *buf, size_t len)
 {
 	int ret;
 
-	WARN((long) buf & 3, "%s: unaligned buffer", __func__);
+	WARN((long)buf & 3, "%s: unaligned buffer", __func__);
 	wdev->hwbus_ops->lock(wdev->hwbus_priv);
 	ret = wdev->hwbus_ops->copy_to_io(wdev->hwbus_priv,
 					  WFX_REG_IN_OUT_QUEUE, buf, len);
@@ -335,7 +335,7 @@ int igpr_reg_read(struct wfx_dev *wdev, int index, u32 *val)
 {
 	int ret;
 
-	*val = ~0; // Never return undefined value
+	*val = ~0; /* Never return undefined value */
 	ret = write32_locked(wdev, WFX_REG_SET_GEN_R_W, IGPR_RW | index << 24);
 	if (ret)
 		return ret;

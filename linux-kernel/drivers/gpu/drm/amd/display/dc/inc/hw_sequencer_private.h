@@ -40,10 +40,16 @@ struct dce_hwseq_wa {
 	bool false_optc_underflow;
 	bool DEGVIDCN10_254;
 	bool DEGVIDCN21;
+	bool disallow_self_refresh_during_multi_plane_transition;
+#if defined(CONFIG_DRM_AMD_DC_DCN)
+	bool dp_hpo_and_otg_sequence;
+#endif
 };
 
 struct hwseq_wa_state {
 	bool DEGVIDCN10_253_applied;
+	bool disallow_self_refresh_during_multi_plane_transition_applied;
+	unsigned int disallow_self_refresh_during_multi_plane_transition_applied_on_frame;
 };
 
 struct pipe_ctx;
@@ -124,11 +130,6 @@ struct hwseq_private_funcs {
 			const struct dc_stream_state *stream,
 			struct dc_state *context);
 	bool (*s0i3_golden_init_wa)(struct dc *dc);
-	void (*get_surface_visual_confirm_color)(
-			const struct pipe_ctx *pipe_ctx,
-			struct tg_color *color);
-	void (*get_hdr_visual_confirm_color)(struct pipe_ctx *pipe_ctx,
-			struct tg_color *color);
 	void (*set_hdr_multiplier)(struct pipe_ctx *pipe_ctx);
 	void (*verify_allow_pstate_change_high)(struct dc *dc);
 	void (*program_pipe)(struct dc *dc,
@@ -140,6 +141,9 @@ struct hwseq_private_funcs {
 			const struct dc_plane_state *plane_state);
 	bool (*set_shaper_3dlut)(struct pipe_ctx *pipe_ctx,
 			const struct dc_plane_state *plane_state);
+	void (*PLAT_58856_wa)(struct dc_state *context,
+			struct pipe_ctx *pipe_ctx);
+	void (*setup_hpo_hw_control)(const struct dce_hwseq *hws, bool enable);
 };
 
 struct dce_hwseq {
@@ -151,6 +155,10 @@ struct dce_hwseq {
 	struct hwseq_wa_state wa_state;
 	struct hwseq_private_funcs funcs;
 
+	PHYSICAL_ADDRESS_LOC fb_base;
+	PHYSICAL_ADDRESS_LOC fb_top;
+	PHYSICAL_ADDRESS_LOC fb_offset;
+	PHYSICAL_ADDRESS_LOC uma_top;
 };
 
 #endif /* __DC_HW_SEQUENCER_PRIVATE_H__ */

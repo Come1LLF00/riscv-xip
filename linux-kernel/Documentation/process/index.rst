@@ -27,12 +27,13 @@ Below are the essential guides that every developer should read.
    submitting-patches
    programming-language
    coding-style
+   maintainer-handbooks
    maintainer-pgp-guide
    email-clients
    kernel-enforcement-statement
    kernel-driver-statement
 
-Other guides to the community that are of interest to most developers are: 
+Other guides to the community that are of interest to most developers are:
 
 .. toctree::
    :maxdepth: 1
@@ -61,6 +62,7 @@ lack of a better place.
    botching-up-ioctls
    clang-format
    ../riscv/patch-acceptance
+   ../core-api/unaligned-memory-access
 
 .. only::  subproject and html
 

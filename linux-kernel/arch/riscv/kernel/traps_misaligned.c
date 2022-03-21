@@ -84,12 +84,15 @@
 
 #define INSN_LEN(insn)			((((insn) & 0x3) < 0x3) ? 2 : 4)
 
-#if __riscv_xlen == 64
+#if defined(CONFIG_64BIT)
 #define LOG_REGBYTES			3
+#define XLEN				64
 #else
 #define LOG_REGBYTES			2
+#define XLEN				32
 #endif
 #define REGBYTES			(1 << LOG_REGBYTES)
+#define XLEN_MINUS_16			((XLEN) - 16)
 
 #define SH_RD				7
 #define SH_RS1				15
@@ -174,7 +177,7 @@ DECLARE_UNPRIVILEGED_LOAD_FUNCTION(s32, lw)
 DECLARE_UNPRIVILEGED_STORE_FUNCTION(u8, sb)
 DECLARE_UNPRIVILEGED_STORE_FUNCTION(u16, sh)
 DECLARE_UNPRIVILEGED_STORE_FUNCTION(u32, sw)
-#if __riscv_xlen == 64
+#if defined(CONFIG_64BIT)
 DECLARE_UNPRIVILEGED_LOAD_FUNCTION(u32, lwu)
 DECLARE_UNPRIVILEGED_LOAD_FUNCTION(u64, ld)
 DECLARE_UNPRIVILEGED_STORE_FUNCTION(u64, sd)
@@ -203,7 +206,7 @@ static inline ulong get_insn(ulong mepc)
 
 	asm ("and %[tmp], %[addr], 2\n"
 		"bnez %[tmp], 1f\n"
-#if __riscv_xlen == 64
+#if defined(CONFIG_64BIT)
 		STR(LWU) " %[insn], (%[addr])\n"
 #else
 		STR(LW) " %[insn], (%[addr])\n"
@@ -223,7 +226,7 @@ static inline ulong get_insn(ulong mepc)
 		"2:"
 	: [insn] "=&r" (val), [tmp] "=&r" (tmp)
 	: [addr] "r" (__mepc), [rvc_mask] "r" (rvc_mask),
-	  [xlen_minus_16] "i" (__riscv_xlen - 16));
+	  [xlen_minus_16] "i" (XLEN_MINUS_16));
 
 	return val;
 }
@@ -247,7 +250,7 @@ int handle_misaligned_load(struct pt_regs *regs)
 	if ((insn & INSN_MASK_LW) == INSN_MATCH_LW) {
 		len = 4;
 		shift = 8 * (sizeof(unsigned long) - len);
-#if __riscv_xlen == 64
+#if defined(CONFIG_64BIT)
 	} else if ((insn & INSN_MASK_LD) == INSN_MATCH_LD) {
 		len = 8;
 		shift = 8 * (sizeof(unsigned long) - len);
@@ -265,8 +268,7 @@ int handle_misaligned_load(struct pt_regs *regs)
 		shift = 8 * (sizeof(unsigned long) - len);
 	} else if ((insn & INSN_MASK_LHU) == INSN_MATCH_LHU) {
 		len = 2;
-#ifdef __riscv_compressed
-#if __riscv_xlen >= 64
+#if defined(CONFIG_64BIT)
 	} else if ((insn & INSN_MASK_C_LD) == INSN_MATCH_C_LD) {
 		len = 8;
 		shift = 8 * (sizeof(unsigned long) - len);
@@ -291,7 +293,7 @@ int handle_misaligned_load(struct pt_regs *regs)
 	} else if ((insn & INSN_MASK_C_FLDSP) == INSN_MATCH_C_FLDSP) {
 		fp = 1;
 		len = 8;
-#if __riscv_xlen == 32
+#if defined(CONFIG_32BIT)
 	} else if ((insn & INSN_MASK_C_FLW) == INSN_MATCH_C_FLW) {
 		fp = 1;
 		len = 4;
@@ -299,7 +301,6 @@ int handle_misaligned_load(struct pt_regs *regs)
 	} else if ((insn & INSN_MASK_C_FLWSP) == INSN_MATCH_C_FLWSP) {
 		fp = 1;
 		len = 4;
-#endif
 #endif
 	} else {
 		regs->epc = epc;
@@ -333,14 +334,13 @@ int handle_misaligned_store(struct pt_regs *regs)
 
 	if ((insn & INSN_MASK_SW) == INSN_MATCH_SW) {
 		len = 4;
-#if __riscv_xlen == 64
+#if defined(CONFIG_64BIT)
 	} else if ((insn & INSN_MASK_SD) == INSN_MATCH_SD) {
 		len = 8;
 #endif
 	} else if ((insn & INSN_MASK_SH) == INSN_MATCH_SH) {
 		len = 2;
-#ifdef __riscv_compressed
-#if __riscv_xlen >= 64
+#if defined(CONFIG_64BIT)
 	} else if ((insn & INSN_MASK_C_SD) == INSN_MATCH_C_SD) {
 		len = 8;
 		val.data_ulong = GET_RS2S(insn, regs);
@@ -356,7 +356,6 @@ int handle_misaligned_store(struct pt_regs *regs)
 		   ((insn >> SH_RD) & 0x1f)) {
 		len = 4;
 		val.data_ulong = GET_RS2C(insn, regs);
-#endif
 	} else {
 		regs->epc = epc;
 		return -1;

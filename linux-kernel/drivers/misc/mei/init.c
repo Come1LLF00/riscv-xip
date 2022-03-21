@@ -24,6 +24,7 @@ const char *mei_dev_state_str(int state)
 	MEI_DEV_STATE(ENABLED);
 	MEI_DEV_STATE(RESETTING);
 	MEI_DEV_STATE(DISABLED);
+	MEI_DEV_STATE(POWERING_DOWN);
 	MEI_DEV_STATE(POWER_DOWN);
 	MEI_DEV_STATE(POWER_UP);
 	default:
@@ -303,9 +304,12 @@ void mei_stop(struct mei_device *dev)
 	dev_dbg(dev->dev, "stopping the device.\n");
 
 	mutex_lock(&dev->device_lock);
-	mei_set_devstate(dev, MEI_DEV_POWER_DOWN);
+	mei_set_devstate(dev, MEI_DEV_POWERING_DOWN);
 	mutex_unlock(&dev->device_lock);
 	mei_cl_bus_remove_devices(dev);
+	mutex_lock(&dev->device_lock);
+	mei_set_devstate(dev, MEI_DEV_POWER_DOWN);
+	mutex_unlock(&dev->device_lock);
 
 	mei_cancel_work(dev);
 

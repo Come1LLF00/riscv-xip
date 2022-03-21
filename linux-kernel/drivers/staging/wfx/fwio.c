@@ -2,7 +2,7 @@
 /*
  * Firmware loading.
  *
- * Copyright (c) 2017-2019, Silicon Laboratories, Inc.
+ * Copyright (c) 2017-2020, Silicon Laboratories, Inc.
  * Copyright (c) 2010, ST-Ericsson
  */
 #include <linux/firmware.h>
@@ -14,11 +14,11 @@
 #include "wfx.h"
 #include "hwio.h"
 
-// Addresses below are in SRAM area
+/* Addresses below are in SRAM area */
 #define WFX_DNLD_FIFO             0x09004000
 #define     DNLD_BLOCK_SIZE           0x0400
-#define     DNLD_FIFO_SIZE            0x8000 // (32 * DNLD_BLOCK_SIZE)
-// Download Control Area (DCA)
+#define     DNLD_FIFO_SIZE            0x8000 /* (32 * DNLD_BLOCK_SIZE) */
+/* Download Control Area (DCA) */
 #define WFX_DCA_IMAGE_SIZE        0x0900C000
 #define WFX_DCA_PUT               0x0900C004
 #define WFX_DCA_GET               0x0900C008
@@ -58,8 +58,8 @@
 #define     ERR_ECC_PUB_KEY           0x11
 #define     ERR_MAC_KEY               0x18
 
-#define DCA_TIMEOUT  50 // milliseconds
-#define WAKEUP_TIMEOUT 200 // milliseconds
+#define DCA_TIMEOUT  50 /* milliseconds */
+#define WAKEUP_TIMEOUT 200 /* milliseconds */
 
 static const char * const fwio_errors[] = {
 	[ERR_INVALID_SEC_TYPE] = "Invalid section type or wrong encryption",
@@ -69,8 +69,7 @@ static const char * const fwio_errors[] = {
 	[ERR_MAC_KEY] = "MAC key not initialized",
 };
 
-/*
- * request_firmware() allocate data using vmalloc(). It is not compatible with
+/* request_firmware() allocate data using vmalloc(). It is not compatible with
  * underlying hardware that use DMA. Function below detect this case and
  * allocate a bounce buffer if necessary.
  *
@@ -94,21 +93,21 @@ static int sram_write_dma_safe(struct wfx_dev *wdev, u32 addr, const u8 *buf,
 		tmp = buf;
 	}
 	ret = sram_buf_write(wdev, addr, tmp, len);
-	if (!virt_addr_valid(buf))
+	if (tmp != buf)
 		kfree(tmp);
 	return ret;
 }
 
-int get_firmware(struct wfx_dev *wdev, u32 keyset_chip,
-		 const struct firmware **fw, int *file_offset)
+static int get_firmware(struct wfx_dev *wdev, u32 keyset_chip,
+			const struct firmware **fw, int *file_offset)
 {
 	int keyset_file;
 	char filename[256];
 	const char *data;
 	int ret;
 
-	snprintf(filename, sizeof(filename), "%s_%02X.sec", wdev->pdata.file_fw,
-		 keyset_chip);
+	snprintf(filename, sizeof(filename), "%s_%02X.sec",
+		 wdev->pdata.file_fw, keyset_chip);
 	ret = firmware_request_nowarn(fw, filename, wdev->dev);
 	if (ret) {
 		dev_info(wdev->dev, "can't load %s, falling back to %s.sec\n",
@@ -125,7 +124,7 @@ int get_firmware(struct wfx_dev *wdev, u32 keyset_chip,
 
 	data = (*fw)->data;
 	if (memcmp(data, "KEYSET", 6) != 0) {
-		// Legacy firmware format
+		/* Legacy firmware format */
 		*file_offset = 0;
 		keyset_file = 0x90;
 	} else {
@@ -177,7 +176,7 @@ static int wait_ncp_status(struct wfx_dev *wdev, u32 status)
 static int upload_firmware(struct wfx_dev *wdev, const u8 *data, size_t len)
 {
 	int ret;
-	u32 offs, bytes_done;
+	u32 offs, bytes_done = 0;
 	ktime_t now, start;
 
 	if (len % DNLD_BLOCK_SIZE) {
@@ -188,15 +187,14 @@ static int upload_firmware(struct wfx_dev *wdev, const u8 *data, size_t len)
 	while (offs < len) {
 		start = ktime_get();
 		for (;;) {
-			ret = sram_reg_read(wdev, WFX_DCA_GET, &bytes_done);
-			if (ret < 0)
-				return ret;
 			now = ktime_get();
-			if (offs +
-			    DNLD_BLOCK_SIZE - bytes_done < DNLD_FIFO_SIZE)
+			if (offs + DNLD_BLOCK_SIZE - bytes_done < DNLD_FIFO_SIZE)
 				break;
 			if (ktime_after(now, ktime_add_ms(start, DCA_TIMEOUT)))
 				return -ETIMEDOUT;
+			ret = sram_reg_read(wdev, WFX_DCA_GET, &bytes_done);
+			if (ret < 0)
+				return ret;
 		}
 		if (ktime_compare(now, start))
 			dev_dbg(wdev->dev, "answer after %lldus\n",
@@ -208,8 +206,9 @@ static int upload_firmware(struct wfx_dev *wdev, const u8 *data, size_t len)
 		if (ret < 0)
 			return ret;
 
-		// WFx seems to not support writing 0 in this register during
-		// first loop
+		/* The device seems to not support writing 0 in this register
+		 * during first loop
+		 */
 		offs += DNLD_BLOCK_SIZE;
 		ret = sram_reg_write(wdev, WFX_DCA_PUT, offs);
 		if (ret < 0)
@@ -266,7 +265,7 @@ static int load_firmware_secure(struct wfx_dev *wdev)
 	if (ret)
 		goto error;
 
-	sram_reg_write(wdev, WFX_DNLD_FIFO, 0xFFFFFFFF); // Fifo init
+	sram_reg_write(wdev, WFX_DNLD_FIFO, 0xFFFFFFFF); /* Fifo init */
 	sram_write_dma_safe(wdev, WFX_DCA_FW_VERSION, "\x01\x00\x00\x00",
 			    FW_VERSION_SIZE);
 	sram_write_dma_safe(wdev, WFX_DCA_FW_SIGNATURE, fw->data + fw_offset,
@@ -290,7 +289,7 @@ static int load_firmware_secure(struct wfx_dev *wdev)
 
 	sram_reg_write(wdev, WFX_DCA_HOST_STATUS, HOST_UPLOAD_COMPLETE);
 	ret = wait_ncp_status(wdev, NCP_AUTH_OK);
-	// Legacy ROM support
+	/* Legacy ROM support */
 	if (ret < 0)
 		ret = wait_ncp_status(wdev, NCP_PUB_KEY_RDY);
 	if (ret < 0)
@@ -325,8 +324,8 @@ static int init_gpr(struct wfx_dev *wdev)
 				     gpr_init[i].value);
 		if (ret < 0)
 			return ret;
-		dev_dbg(wdev->dev, "  index %02x: %08x\n", gpr_init[i].index,
-			gpr_init[i].value);
+		dev_dbg(wdev->dev, "  index %02x: %08x\n",
+			gpr_init[i].index, gpr_init[i].value);
 	}
 	return 0;
 }
@@ -335,7 +334,7 @@ int wfx_init_device(struct wfx_dev *wdev)
 {
 	int ret;
 	int hw_revision, hw_type;
-	int wakeup_timeout = 50; // ms
+	int wakeup_timeout = 50; /* ms */
 	ktime_t now, start;
 	u32 reg;
 
@@ -360,7 +359,7 @@ int wfx_init_device(struct wfx_dev *wdev)
 	dev_dbg(wdev->dev, "initial config register value: %08x\n", reg);
 
 	hw_revision = FIELD_GET(CFG_DEVICE_ID_MAJOR, reg);
-	if (hw_revision == 0 || hw_revision > 2) {
+	if (hw_revision == 0) {
 		dev_err(wdev->dev, "bad hardware revision number: %d\n",
 			hw_revision);
 		return -ENODEV;
@@ -398,10 +397,9 @@ int wfx_init_device(struct wfx_dev *wdev)
 	ret = load_firmware_secure(wdev);
 	if (ret < 0)
 		return ret;
-	ret = config_reg_write_bits(wdev,
-				    CFG_DIRECT_ACCESS_MODE |
-				    CFG_IRQ_ENABLE_DATA |
-				    CFG_IRQ_ENABLE_WRDY,
-				    CFG_IRQ_ENABLE_DATA);
-	return ret;
+	return config_reg_write_bits(wdev,
+				     CFG_DIRECT_ACCESS_MODE |
+				     CFG_IRQ_ENABLE_DATA |
+				     CFG_IRQ_ENABLE_WRDY,
+				     CFG_IRQ_ENABLE_DATA);
 }

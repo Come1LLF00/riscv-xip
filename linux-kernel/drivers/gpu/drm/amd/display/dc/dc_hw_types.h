@@ -62,6 +62,7 @@ enum dc_plane_addr_type {
 	PLN_ADDR_TYPE_GRAPHICS = 0,
 	PLN_ADDR_TYPE_GRPH_STEREO,
 	PLN_ADDR_TYPE_VIDEO_PROGRESSIVE,
+	PLN_ADDR_TYPE_RGBEA
 };
 
 struct dc_plane_address {
@@ -70,6 +71,7 @@ struct dc_plane_address {
 	union {
 		struct{
 			PHYSICAL_ADDRESS_LOC addr;
+			PHYSICAL_ADDRESS_LOC cursor_cache_addr;
 			PHYSICAL_ADDRESS_LOC meta_addr;
 			union large_integer dcc_const_color;
 		} grph;
@@ -84,6 +86,14 @@ struct dc_plane_address {
 			PHYSICAL_ADDRESS_LOC right_meta_addr;
 			union large_integer right_dcc_const_color;
 
+			PHYSICAL_ADDRESS_LOC left_alpha_addr;
+			PHYSICAL_ADDRESS_LOC left_alpha_meta_addr;
+			union large_integer left_alpha_dcc_const_color;
+
+			PHYSICAL_ADDRESS_LOC right_alpha_addr;
+			PHYSICAL_ADDRESS_LOC right_alpha_meta_addr;
+			union large_integer right_alpha_dcc_const_color;
+
 		} grph_stereo;
 
 		/*video  progressive*/
@@ -96,6 +106,16 @@ struct dc_plane_address {
 			PHYSICAL_ADDRESS_LOC chroma_meta_addr;
 			union large_integer chroma_dcc_const_color;
 		} video_progressive;
+
+		struct {
+			PHYSICAL_ADDRESS_LOC addr;
+			PHYSICAL_ADDRESS_LOC meta_addr;
+			union large_integer dcc_const_color;
+
+			PHYSICAL_ADDRESS_LOC alpha_addr;
+			PHYSICAL_ADDRESS_LOC alpha_meta_addr;
+			union large_integer alpha_dcc_const_color;
+		} rgbea;
 	};
 
 	union large_integer page_table_base;
@@ -131,9 +151,11 @@ struct dc_plane_dcc_param {
 
 	int meta_pitch;
 	bool independent_64b_blks;
+	uint8_t dcc_ind_blk;
 
 	int meta_pitch_c;
 	bool independent_64b_blks_c;
+	uint8_t dcc_ind_blk_c;
 };
 
 /*Displayable pixel format in fb*/
@@ -160,6 +182,8 @@ enum surface_pixel_format {
 	SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010_XR_BIAS,
 	/*64 bpp */
 	SURFACE_PIXEL_FORMAT_GRPH_ARGB16161616,
+	/*swapped*/
+	SURFACE_PIXEL_FORMAT_GRPH_ABGR16161616,
 	/*float*/
 	SURFACE_PIXEL_FORMAT_GRPH_ARGB16161616F,
 	/*swaped & float*/
@@ -169,6 +193,8 @@ enum surface_pixel_format {
 	SURFACE_PIXEL_FORMAT_GRPH_BGR101111_FIX,
 	SURFACE_PIXEL_FORMAT_GRPH_RGB111110_FLOAT,
 	SURFACE_PIXEL_FORMAT_GRPH_BGR101111_FLOAT,
+	SURFACE_PIXEL_FORMAT_GRPH_RGBE,
+	SURFACE_PIXEL_FORMAT_GRPH_RGBE_ALPHA,
 	SURFACE_PIXEL_FORMAT_VIDEO_BEGIN,
 	SURFACE_PIXEL_FORMAT_VIDEO_420_YCbCr =
 		SURFACE_PIXEL_FORMAT_VIDEO_BEGIN,
@@ -355,6 +381,7 @@ union dc_tiling_info {
 		bool meta_linear;
 		bool rb_aligned;
 		bool pipe_aligned;
+		unsigned int num_pkrs;
 	} gfx9;
 };
 
@@ -385,6 +412,8 @@ struct dc_cursor_position {
 	 */
 	bool enable;
 
+	/* Translate cursor x/y by the source rectangle for each plane. */
+	bool translate_by_source;
 };
 
 struct dc_cursor_mi_param {
@@ -675,6 +704,10 @@ struct dc_crtc_timing_flags {
 	uint32_t LTE_340MCSC_SCRAMBLE:1;
 
 	uint32_t DSC : 1; /* Use DSC with this timing */
+#ifndef TRIM_FSFT
+	uint32_t FAST_TRANSPORT: 1;
+#endif
+	uint32_t VBLANK_SYNCHRONIZABLE: 1;
 };
 
 enum dc_timing_3d_format {
@@ -708,6 +741,10 @@ struct dc_dsc_config {
 	uint32_t version_minor; /* DSC minor version. Full version is formed as 1.version_minor. */
 	bool ycbcr422_simple; /* Tell DSC engine to convert YCbCr 4:2:2 to 'YCbCr 4:2:2 simple'. */
 	int32_t rc_buffer_size; /* DSC RC buffer block size in bytes */
+#if defined(CONFIG_DRM_AMD_DC_DCN)
+	bool is_frl; /* indicate if DSC is applied based on HDMI FRL sink's capability */
+#endif
+	bool is_dp; /* indicate if DSC is applied based on DP's capability */
 };
 struct dc_crtc_timing {
 	uint32_t h_total;
@@ -734,7 +771,12 @@ struct dc_crtc_timing {
 	enum dc_aspect_ratio aspect_ratio;
 	enum scanning_type scan_type;
 
+#ifndef TRIM_FSFT
+	uint32_t fast_transport_output_rate_100hz;
+#endif
+
 	struct dc_crtc_timing_flags flags;
+	uint32_t dsc_fixed_bits_per_pixel_x16; /* DSC target bitrate in 1/16 of bpp (e.g. 128 -> 8bpp) */
 	struct dc_dsc_config dsc_cfg;
 };
 
@@ -811,6 +853,38 @@ enum dwb_stereo_type {
 	DWB_STEREO_TYPE_FRAME_SEQUENTIAL = 3,	/* Frame sequential */
 };
 
+enum dwb_out_format {
+	DWB_OUT_FORMAT_32BPP_ARGB = 0,
+	DWB_OUT_FORMAT_32BPP_RGBA = 1,
+	DWB_OUT_FORMAT_64BPP_ARGB = 2,
+	DWB_OUT_FORMAT_64BPP_RGBA = 3
+};
+
+enum dwb_out_denorm {
+	DWB_OUT_DENORM_10BPC = 0,
+	DWB_OUT_DENORM_8BPC = 1,
+	DWB_OUT_DENORM_BYPASS = 2
+};
+
+enum cm_gamut_remap_select {
+	CM_GAMUT_REMAP_MODE_BYPASS = 0,
+	CM_GAMUT_REMAP_MODE_RAMA_COEFF,
+	CM_GAMUT_REMAP_MODE_RAMB_COEFF,
+	CM_GAMUT_REMAP_MODE_RESERVED
+};
+
+enum cm_gamut_coef_format {
+	CM_GAMUT_REMAP_COEF_FORMAT_S2_13 = 0,
+	CM_GAMUT_REMAP_COEF_FORMAT_S3_12 = 1
+};
+
+struct mcif_warmup_params {
+	union large_integer	start_address;
+	unsigned int		address_increment;
+	unsigned int		region_size;
+	unsigned int		p_vmid;
+};
+
 #define MCIF_BUF_COUNT	4
 
 struct mcif_buf_params {
@@ -820,6 +894,7 @@ struct mcif_buf_params {
 	unsigned int		chroma_pitch;
 	unsigned int		warmup_pitch;
 	unsigned int		swlock;
+	unsigned int		p_vmid;
 };
 
 

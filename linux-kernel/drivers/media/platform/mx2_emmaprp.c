@@ -804,7 +804,6 @@ static int emmaprp_probe(struct platform_device *pdev)
 {
 	struct emmaprp_dev *pcdev;
 	struct video_device *vfd;
-	struct resource *res;
 	int irq, ret;
 
 	pcdev = devm_kzalloc(&pdev->dev, sizeof(*pcdev), GFP_KERNEL);
@@ -822,8 +821,7 @@ static int emmaprp_probe(struct platform_device *pdev)
 	if (IS_ERR(pcdev->clk_emma_ahb))
 		return PTR_ERR(pcdev->clk_emma_ahb);
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	pcdev->base_emma = devm_ioremap_resource(&pdev->dev, res);
+	pcdev->base_emma = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(pcdev->base_emma))
 		return PTR_ERR(pcdev->base_emma);
 
@@ -852,8 +850,11 @@ static int emmaprp_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, pcdev);
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0)
-		return irq;
+	if (irq < 0) {
+		ret = irq;
+		goto rel_vdev;
+	}
+
 	ret = devm_request_irq(&pdev->dev, irq, emmaprp_irq, 0,
 			       dev_name(&pdev->dev), pcdev);
 	if (ret)
@@ -866,7 +867,7 @@ static int emmaprp_probe(struct platform_device *pdev)
 		goto rel_vdev;
 	}
 
-	ret = video_register_device(vfd, VFL_TYPE_GRABBER, 0);
+	ret = video_register_device(vfd, VFL_TYPE_VIDEO, 0);
 	if (ret) {
 		v4l2_err(&pcdev->v4l2_dev, "Failed to register video device\n");
 		goto rel_m2m;

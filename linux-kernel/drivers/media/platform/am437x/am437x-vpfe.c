@@ -26,6 +26,7 @@
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-event.h>
 #include <media/v4l2-fwnode.h>
+#include <media/v4l2-rect.h>
 
 #include "am437x-vpfe.h"
 
@@ -285,6 +286,7 @@ vpfe_ccdc_validate_param(struct vpfe_ccdc *ccdc,
 	max_data = ccdc_data_size_max_bit(ccdcparam->data_sz);
 
 	if (ccdcparam->alaw.gamma_wd > VPFE_CCDC_GAMMA_BITS_09_0 ||
+	    ccdcparam->data_sz > VPFE_CCDC_DATA_8BITS ||
 	    max_gamma > max_data) {
 		vpfe_dbg(1, vpfe, "Invalid data line select\n");
 		return -EINVAL;
@@ -324,7 +326,7 @@ static void vpfe_ccdc_restore_defaults(struct vpfe_ccdc *ccdc)
 
 static int vpfe_ccdc_close(struct vpfe_ccdc *ccdc, struct device *dev)
 {
-	struct vpfe_device *vpfe = container_of(ccdc, struct vpfe_device, ccdc);
+	struct vpfe_device *vpfe = to_vpfe(ccdc);
 	u32 dma_cntl, pcr;
 
 	pcr = vpfe_reg_read(ccdc, VPFE_PCR);
@@ -348,7 +350,7 @@ static int vpfe_ccdc_close(struct vpfe_ccdc *ccdc, struct device *dev)
 
 static int vpfe_ccdc_set_params(struct vpfe_ccdc *ccdc, void __user *params)
 {
-	struct vpfe_device *vpfe = container_of(ccdc, struct vpfe_device, ccdc);
+	struct vpfe_device *vpfe = to_vpfe(ccdc);
 	struct vpfe_ccdc_config_params_raw raw_params;
 	int x;
 
@@ -504,7 +506,7 @@ vpfe_ccdc_config_black_compense(struct vpfe_ccdc *ccdc,
  */
 static void vpfe_ccdc_config_raw(struct vpfe_ccdc *ccdc)
 {
-	struct vpfe_device *vpfe = container_of(ccdc, struct vpfe_device, ccdc);
+	struct vpfe_device *vpfe = to_vpfe(ccdc);
 	struct vpfe_ccdc_config_params_raw *config_params =
 				&ccdc->ccdc_cfg.bayer.config_params;
 	struct ccdc_params_raw *params = &ccdc->ccdc_cfg.bayer;
@@ -609,7 +611,7 @@ static inline enum ccdc_buftype vpfe_ccdc_get_buftype(struct vpfe_ccdc *ccdc)
 
 static int vpfe_ccdc_set_pixel_format(struct vpfe_ccdc *ccdc, u32 pixfmt)
 {
-	struct vpfe_device *vpfe = container_of(ccdc, struct vpfe_device, ccdc);
+	struct vpfe_device *vpfe = to_vpfe(ccdc);
 
 	vpfe_dbg(1, vpfe, "%s: if_type: %d, pixfmt:%s\n",
 		 __func__, ccdc->ccdc_cfg.if_type, print_fourcc(pixfmt));
@@ -741,7 +743,7 @@ static inline void vpfe_set_sdr_addr(struct vpfe_ccdc *ccdc, unsigned long addr)
 static int vpfe_ccdc_set_hw_if_params(struct vpfe_ccdc *ccdc,
 				      struct vpfe_hw_if_param *params)
 {
-	struct vpfe_device *vpfe = container_of(ccdc, struct vpfe_device, ccdc);
+	struct vpfe_device *vpfe = to_vpfe(ccdc);
 
 	ccdc->ccdc_cfg.if_type = params->if_type;
 
@@ -1019,7 +1021,9 @@ static int vpfe_initialize_device(struct vpfe_device *vpfe)
 	if (ret)
 		return ret;
 
-	pm_runtime_get_sync(vpfe->pdev);
+	ret = pm_runtime_resume_and_get(vpfe->pdev);
+	if (ret < 0)
+		return ret;
 
 	vpfe_config_enable(&vpfe->ccdc, 1);
 
@@ -1986,20 +1990,6 @@ vpfe_g_selection(struct file *file, void *fh, struct v4l2_selection *s)
 	return 0;
 }
 
-static int enclosed_rectangle(struct v4l2_rect *a, struct v4l2_rect *b)
-{
-	if (a->left < b->left || a->top < b->top)
-		return 0;
-
-	if (a->left + a->width > b->left + b->width)
-		return 0;
-
-	if (a->top + a->height > b->top + b->height)
-		return 0;
-
-	return 1;
-}
-
 static int
 vpfe_s_selection(struct file *file, void *fh, struct v4l2_selection *s)
 {
@@ -2024,10 +2014,10 @@ vpfe_s_selection(struct file *file, void *fh, struct v4l2_selection *s)
 	r.left = clamp_t(unsigned int, r.left, 0, cr.width - r.width);
 	r.top  = clamp_t(unsigned int, r.top, 0, cr.height - r.height);
 
-	if (s->flags & V4L2_SEL_FLAG_LE && !enclosed_rectangle(&r, &s->r))
+	if (s->flags & V4L2_SEL_FLAG_LE && !v4l2_rect_enclosed(&r, &s->r))
 		return -ERANGE;
 
-	if (s->flags & V4L2_SEL_FLAG_GE && !enclosed_rectangle(&s->r, &r))
+	if (s->flags & V4L2_SEL_FLAG_GE && !v4l2_rect_enclosed(&s->r, &r))
 		return -ERANGE;
 
 	s->r = vpfe->crop = r;
@@ -2267,7 +2257,7 @@ static int vpfe_probe_complete(struct vpfe_device *vpfe)
 	vdev->device_caps = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING |
 			    V4L2_CAP_READWRITE;
 	video_set_drvdata(vdev, vpfe);
-	err = video_register_device(&vpfe->video_dev, VFL_TYPE_GRABBER, -1);
+	err = video_register_device(&vpfe->video_dev, VFL_TYPE_VIDEO, -1);
 	if (err) {
 		vpfe_err(vpfe,
 			"Unable to register video device.\n");
@@ -2307,7 +2297,7 @@ vpfe_get_pdata(struct vpfe_device *vpfe)
 
 	dev_dbg(dev, "vpfe_get_pdata\n");
 
-	v4l2_async_notifier_init(&vpfe->notifier);
+	v4l2_async_nf_init(&vpfe->notifier);
 
 	if (!IS_ENABLED(CONFIG_OF) || !dev->of_node)
 		return dev->platform_data;
@@ -2375,9 +2365,10 @@ vpfe_get_pdata(struct vpfe_device *vpfe)
 			goto cleanup;
 		}
 
-		pdata->asd[i] = v4l2_async_notifier_add_fwnode_subdev(
-			&vpfe->notifier, of_fwnode_handle(rem),
-			sizeof(struct v4l2_async_subdev));
+		pdata->asd[i] = v4l2_async_nf_add_fwnode(&vpfe->notifier,
+							 of_fwnode_handle(rem),
+							 struct
+							 v4l2_async_subdev);
 		of_node_put(rem);
 		if (IS_ERR(pdata->asd[i]))
 			goto cleanup;
@@ -2387,7 +2378,7 @@ vpfe_get_pdata(struct vpfe_device *vpfe)
 	return pdata;
 
 cleanup:
-	v4l2_async_notifier_cleanup(&vpfe->notifier);
+	v4l2_async_nf_cleanup(&vpfe->notifier);
 	of_node_put(endpoint);
 	return NULL;
 }
@@ -2402,7 +2393,6 @@ static int vpfe_probe(struct platform_device *pdev)
 	struct vpfe_config *vpfe_cfg;
 	struct vpfe_device *vpfe;
 	struct vpfe_ccdc *ccdc;
-	struct resource	*res;
 	int ret;
 
 	vpfe = devm_kzalloc(&pdev->dev, sizeof(*vpfe), GFP_KERNEL);
@@ -2420,8 +2410,7 @@ static int vpfe_probe(struct platform_device *pdev)
 	vpfe->cfg = vpfe_cfg;
 	ccdc = &vpfe->ccdc;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	ccdc->ccdc_cfg.base_addr = devm_ioremap_resource(&pdev->dev, res);
+	ccdc->ccdc_cfg.base_addr = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(ccdc->ccdc_cfg.base_addr)) {
 		ret = PTR_ERR(ccdc->ccdc_cfg.base_addr);
 		goto probe_out_cleanup;
@@ -2455,7 +2444,11 @@ static int vpfe_probe(struct platform_device *pdev)
 	pm_runtime_enable(&pdev->dev);
 
 	/* for now just enable it here instead of waiting for the open */
-	pm_runtime_get_sync(&pdev->dev);
+	ret = pm_runtime_resume_and_get(&pdev->dev);
+	if (ret < 0) {
+		vpfe_err(vpfe, "Unable to resume device.\n");
+		goto probe_out_v4l2_unregister;
+	}
 
 	vpfe_ccdc_config_defaults(ccdc);
 
@@ -2471,7 +2464,7 @@ static int vpfe_probe(struct platform_device *pdev)
 	}
 
 	vpfe->notifier.ops = &vpfe_async_ops;
-	ret = v4l2_async_notifier_register(&vpfe->v4l2_dev, &vpfe->notifier);
+	ret = v4l2_async_nf_register(&vpfe->v4l2_dev, &vpfe->notifier);
 	if (ret) {
 		vpfe_err(vpfe, "Error registering async notifier\n");
 		ret = -EINVAL;
@@ -2483,7 +2476,7 @@ static int vpfe_probe(struct platform_device *pdev)
 probe_out_v4l2_unregister:
 	v4l2_device_unregister(&vpfe->v4l2_dev);
 probe_out_cleanup:
-	v4l2_async_notifier_cleanup(&vpfe->notifier);
+	v4l2_async_nf_cleanup(&vpfe->notifier);
 	return ret;
 }
 
@@ -2496,8 +2489,8 @@ static int vpfe_remove(struct platform_device *pdev)
 
 	pm_runtime_disable(&pdev->dev);
 
-	v4l2_async_notifier_unregister(&vpfe->notifier);
-	v4l2_async_notifier_cleanup(&vpfe->notifier);
+	v4l2_async_nf_unregister(&vpfe->notifier);
+	v4l2_async_nf_cleanup(&vpfe->notifier);
 	v4l2_device_unregister(&vpfe->v4l2_dev);
 	video_unregister_device(&vpfe->video_dev);
 
@@ -2542,6 +2535,11 @@ static int vpfe_suspend(struct device *dev)
 
 	/* only do full suspend if streaming has started */
 	if (vb2_start_streaming_called(&vpfe->buffer_queue)) {
+		/*
+		 * ignore RPM resume errors here, as it is already too late.
+		 * A check like that should happen earlier, either at
+		 * open() or just before start streaming.
+		 */
 		pm_runtime_get_sync(dev);
 		vpfe_config_enable(ccdc, 1);
 

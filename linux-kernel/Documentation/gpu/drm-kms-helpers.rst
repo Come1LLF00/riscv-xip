@@ -80,6 +80,18 @@ Atomic State Helper Reference
 .. kernel-doc:: drivers/gpu/drm/drm_atomic_state_helper.c
    :export:
 
+GEM Atomic Helper Reference
+---------------------------
+
+.. kernel-doc:: drivers/gpu/drm/drm_gem_atomic_helper.c
+   :doc: overview
+
+.. kernel-doc:: include/drm/drm_gem_atomic_helper.h
+   :internal:
+
+.. kernel-doc:: drivers/gpu/drm/drm_gem_atomic_helper.c
+   :export:
+
 Simple KMS Helper Reference
 ===========================
 
@@ -139,11 +151,29 @@ Overview
 .. kernel-doc:: drivers/gpu/drm/drm_bridge.c
    :doc: overview
 
-Default bridge callback sequence
---------------------------------
+Display Driver Integration
+--------------------------
 
 .. kernel-doc:: drivers/gpu/drm/drm_bridge.c
-   :doc: bridge callbacks
+   :doc: display driver integration
+
+Special Care with MIPI-DSI bridges
+----------------------------------
+
+.. kernel-doc:: drivers/gpu/drm/drm_bridge.c
+   :doc: special care dsi
+
+Bridge Operations
+-----------------
+
+.. kernel-doc:: drivers/gpu/drm/drm_bridge.c
+   :doc: bridge operations
+
+Bridge Connector Helper
+-----------------------
+
+.. kernel-doc:: drivers/gpu/drm/drm_bridge_connector.c
+   :doc: overview
 
 
 Bridge Helper Reference
@@ -153,6 +183,12 @@ Bridge Helper Reference
    :internal:
 
 .. kernel-doc:: drivers/gpu/drm/drm_bridge.c
+   :export:
+
+Bridge Connector Helper Reference
+---------------------------------
+
+.. kernel-doc:: drivers/gpu/drm/drm_bridge_connector.c
    :export:
 
 Panel-Bridge Helper Reference
@@ -400,14 +436,17 @@ Legacy CRTC/Modeset Helper Functions Reference
 .. kernel-doc:: drivers/gpu/drm/drm_crtc_helper.c
    :export:
 
-SHMEM GEM Helper Reference
-==========================
+Privacy-screen class
+====================
 
-.. kernel-doc:: drivers/gpu/drm/drm_gem_shmem_helper.c
+.. kernel-doc:: drivers/gpu/drm/drm_privacy_screen.c
    :doc: overview
 
-.. kernel-doc:: include/drm/drm_gem_shmem_helper.h
+.. kernel-doc:: include/drm/drm_privacy_screen_driver.h
    :internal:
 
-.. kernel-doc:: drivers/gpu/drm/drm_gem_shmem_helper.c
+.. kernel-doc:: include/drm/drm_privacy_screen_machine.h
+   :internal:
+
+.. kernel-doc:: drivers/gpu/drm/drm_privacy_screen.c
    :export:

@@ -45,9 +45,9 @@
 #include <linux/mm.h>
 #include <linux/notifier.h>
 #include <linux/export.h>
+#include <linux/semaphore.h>
 
 #include <asm/page.h>
-#include <asm/pgtable.h>
 #include <asm/xen/hypervisor.h>
 #include <asm/hypervisor.h>
 #include <xen/xenbus.h>
@@ -180,6 +180,12 @@ static int xenbus_probe_backend(struct xen_bus_type *bus, const char *type,
 	return err;
 }
 
+static bool frontend_will_handle(struct xenbus_watch *watch,
+				 const char *path, const char *token)
+{
+	return watch->nr_pending == 0;
+}
+
 static void frontend_changed(struct xenbus_watch *watch,
 			     const char *path, const char *token)
 {
@@ -191,6 +197,7 @@ static struct xen_bus_type xenbus_backend = {
 	.levels = 3,		/* backend/type/<frontend>/<id> */
 	.get_bus_id = backend_bus_id,
 	.probe = xenbus_probe_backend,
+	.otherend_will_handle = frontend_will_handle,
 	.otherend_changed = frontend_changed,
 	.bus = {
 		.name		= "xen-backend",
@@ -257,10 +264,10 @@ static int backend_reclaim_memory(struct device *dev, void *data)
 	drv = to_xenbus_driver(dev->driver);
 	if (drv && drv->reclaim_memory) {
 		xdev = to_xenbus_device(dev);
-		if (!spin_trylock(&xdev->reclaim_lock))
+		if (down_trylock(&xdev->reclaim_sem))
 			return 0;
 		drv->reclaim_memory(xdev);
-		spin_unlock(&xdev->reclaim_lock);
+		up(&xdev->reclaim_sem);
 	}
 	return 0;
 }

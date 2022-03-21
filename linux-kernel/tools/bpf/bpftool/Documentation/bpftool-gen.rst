@@ -1,3 +1,5 @@
+.. SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+
 ================
 bpftool-gen
 ================
@@ -7,23 +9,46 @@ tool for BPF code-generation
 
 :Manual section: 8
 
+.. include:: substitutions.rst
+
 SYNOPSIS
 ========
 
 	**bpftool** [*OPTIONS*] **gen** *COMMAND*
 
-	*OPTIONS* := { { **-j** | **--json** } [{ **-p** | **--pretty** }] }
+	*OPTIONS* := { |COMMON_OPTIONS| | { **-L** | **--use-loader** } }
 
-	*COMMAND* := { **skeleton | **help** }
+	*COMMAND* := { **object** | **skeleton** | **help** }
 
 GEN COMMANDS
 =============
 
-|	**bpftool** **gen skeleton** *FILE*
+|	**bpftool** **gen object** *OUTPUT_FILE* *INPUT_FILE* [*INPUT_FILE*...]
+|	**bpftool** **gen skeleton** *FILE* [**name** *OBJECT_NAME*]
 |	**bpftool** **gen help**
 
 DESCRIPTION
 ===========
+	**bpftool gen object** *OUTPUT_FILE* *INPUT_FILE* [*INPUT_FILE*...]
+		  Statically link (combine) together one or more *INPUT_FILE*'s
+		  into a single resulting *OUTPUT_FILE*. All the files involved
+		  are BPF ELF object files.
+
+		  The rules of BPF static linking are mostly the same as for
+		  user-space object files, but in addition to combining data
+		  and instruction sections, .BTF and .BTF.ext (if present in
+		  any of the input files) data are combined together. .BTF
+		  data is deduplicated, so all the common types across
+		  *INPUT_FILE*'s will only be represented once in the resulting
+		  BTF information.
+
+		  BPF static linking allows to partition BPF source code into
+		  individually compiled files that are then linked into
+		  a single resulting BPF object file, which can be used to
+		  generated BPF skeleton (with **gen skeleton** command) or
+		  passed directly into **libbpf** (using **bpf_object__open()**
+		  family of APIs).
+
 	**bpftool gen skeleton** *FILE*
 		  Generate BPF skeleton C header file for a given *FILE*.
 
@@ -36,12 +61,12 @@ DESCRIPTION
 		  etc. Skeleton eliminates the need to lookup mentioned
 		  components by name. Instead, if skeleton instantiation
 		  succeeds, they are populated in skeleton structure as valid
-		  libbpf types (e.g., struct bpf_map pointer) and can be
+		  libbpf types (e.g., **struct bpf_map** pointer) and can be
 		  passed to existing generic libbpf APIs.
 
 		  In addition to simple and reliable access to maps and
-		  programs, skeleton provides a storage for BPF links (struct
-		  bpf_link) for each BPF program within BPF object. When
+		  programs, skeleton provides a storage for BPF links (**struct
+		  bpf_link**) for each BPF program within BPF object. When
 		  requested, supported BPF programs will be automatically
 		  attached and resulting BPF links stored for further use by
 		  user in pre-allocated fields in skeleton struct. For BPF
@@ -75,21 +100,24 @@ DESCRIPTION
 		  specific maps, programs, etc.
 
 		  As part of skeleton, few custom functions are generated.
-		  Each of them is prefixed with object name, derived from
-		  object file name. I.e., if BPF object file name is
-		  **example.o**, BPF object name will be **example**. The
-		  following custom functions are provided in such case:
+		  Each of them is prefixed with object name. Object name can
+		  either be derived from object file name, i.e., if BPF object
+		  file name is **example.o**, BPF object name will be
+		  **example**. Object name can be also specified explicitly
+		  through **name** *OBJECT_NAME* parameter. The following
+		  custom functions are provided (assuming **example** as
+		  the object name):
 
 		  - **example__open** and **example__open_opts**.
 		    These functions are used to instantiate skeleton. It
-		    corresponds to libbpf's **bpf_object__open()** API.
+		    corresponds to libbpf's **bpf_object__open**\ () API.
 		    **_opts** variants accepts extra **bpf_object_open_opts**
 		    options.
 
 		  - **example__load**.
 		    This function creates maps, loads and verifies BPF
 		    programs, initializes global data maps. It corresponds to
-		    libppf's **bpf_object__load** API.
+		    libppf's **bpf_object__load**\ () API.
 
 		  - **example__open_and_load** combines **example__open** and
 		    **example__load** invocations in one commonly used
@@ -126,43 +154,28 @@ DESCRIPTION
 
 OPTIONS
 =======
-	-h, --help
-		  Print short generic help message (similar to **bpftool help**).
+	.. include:: common_options.rst
 
-	-V, --version
-		  Print version number (similar to **bpftool version**).
-
-	-j, --json
-		  Generate JSON output. For commands that cannot produce JSON,
-		  this option has no effect.
-
-	-p, --pretty
-		  Generate human-readable JSON output. Implies **-j**.
-
-	-d, --debug
-		  Print all logs available from libbpf, including debug-level
-		  information.
+	-L, --use-loader
+		  For skeletons, generate a "light" skeleton (also known as "loader"
+		  skeleton). A light skeleton contains a loader eBPF program. It does
+		  not use the majority of the libbpf infrastructure, and does not need
+		  libelf.
 
 EXAMPLES
 ========
-**$ cat example.c**
+**$ cat example1.bpf.c**
+
 ::
 
   #include <stdbool.h>
   #include <linux/ptrace.h>
   #include <linux/bpf.h>
-  #include "bpf_helpers.h"
+  #include <bpf/bpf_helpers.h>
 
   const volatile int param1 = 42;
   bool global_flag = true;
   struct { int x; } data = {};
-
-  struct {
-  	__uint(type, BPF_MAP_TYPE_HASH);
-  	__uint(max_entries, 128);
-  	__type(key, int);
-  	__type(value, long);
-  } my_map SEC(".maps");
 
   SEC("raw_tp/sys_enter")
   int handle_sys_enter(struct pt_regs *ctx)
@@ -175,6 +188,21 @@ EXAMPLES
   	return 0;
   }
 
+**$ cat example2.bpf.c**
+
+::
+
+  #include <linux/ptrace.h>
+  #include <linux/bpf.h>
+  #include <bpf/bpf_helpers.h>
+
+  struct {
+  	__uint(type, BPF_MAP_TYPE_HASH);
+  	__uint(max_entries, 128);
+  	__type(key, int);
+  	__type(value, long);
+  } my_map SEC(".maps");
+
   SEC("raw_tp/sys_exit")
   int handle_sys_exit(struct pt_regs *ctx)
   {
@@ -184,9 +212,18 @@ EXAMPLES
   }
 
 This is example BPF application with two BPF programs and a mix of BPF maps
-and global variables.
+and global variables. Source code is split across two source code files.
 
-**$ bpftool gen skeleton example.o**
+**$ clang -target bpf -g example1.bpf.c -o example1.bpf.o**
+**$ clang -target bpf -g example2.bpf.c -o example2.bpf.o**
+**$ bpftool gen object example.bpf.o example1.bpf.o example2.bpf.o**
+
+This set of commands compiles *example1.bpf.c* and *example2.bpf.c*
+individually and then statically links respective object files into the final
+BPF ELF object file *example.bpf.o*.
+
+**$ bpftool gen skeleton example.bpf.o name example | tee example.skel.h**
+
 ::
 
   /* SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause) */
@@ -240,7 +277,8 @@ and global variables.
 
   #endif /* __EXAMPLE_SKEL_H__ */
 
-**$ cat example_user.c**
+**$ cat example.c**
+
 ::
 
   #include "example.skel.h"
@@ -282,7 +320,8 @@ and global variables.
   	return err;
   }
 
-**# ./example_user**
+**# ./example**
+
 ::
 
   my_map name: my_map
@@ -290,16 +329,3 @@ and global variables.
   my_static_var: 7
 
 This is a stripped-out version of skeleton generated for above example code.
-
-SEE ALSO
-========
-	**bpf**\ (2),
-	**bpf-helpers**\ (7),
-	**bpftool**\ (8),
-	**bpftool-map**\ (8),
-	**bpftool-prog**\ (8),
-	**bpftool-cgroup**\ (8),
-	**bpftool-feature**\ (8),
-	**bpftool-net**\ (8),
-	**bpftool-perf**\ (8),
-	**bpftool-btf**\ (8)

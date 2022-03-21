@@ -41,11 +41,11 @@
 
 static void dbgdev_address_watch_disable_nodiq(struct kfd_dev *dev)
 {
-	dev->kfd2kgd->address_watch_disable(dev->kgd);
+	dev->kfd2kgd->address_watch_disable(dev->adev);
 }
 
 static int dbgdev_diq_submit_ib(struct kfd_dbgdev *dbgdev,
-				unsigned int pasid, uint64_t vmid0_address,
+				u32 pasid, uint64_t vmid0_address,
 				uint32_t *packet_buff, size_t size_in_bytes)
 {
 	struct pm4__release_mem *rm_packet;
@@ -155,7 +155,7 @@ static int dbgdev_diq_submit_ib(struct kfd_dbgdev *dbgdev,
 
 	/* Wait till CP writes sync code: */
 	status = amdkfd_fence_wait_timeout(
-			(unsigned int *) rm_state,
+			rm_state,
 			QUEUESTATE__ACTIVE, 1500);
 
 	kfd_gtt_sa_free(dbgdev->dev, mem_obj);
@@ -322,7 +322,7 @@ static int dbgdev_address_watch_nodiq(struct kfd_dbgdev *dbgdev,
 		pr_debug("\t\t%30s\n", "* * * * * * * * * * * * * * * * * *");
 
 		pdd->dev->kfd2kgd->address_watch_execute(
-						dbgdev->dev->kgd,
+						dbgdev->dev->adev,
 						i,
 						cntl.u32All,
 						addrHi.u32All,
@@ -420,7 +420,7 @@ static int dbgdev_address_watch_diq(struct kfd_dbgdev *dbgdev,
 
 		aw_reg_add_dword =
 				dbgdev->dev->kfd2kgd->address_watch_get_offset(
-					dbgdev->dev->kgd,
+					dbgdev->dev->adev,
 					i,
 					ADDRESS_WATCH_REG_CNTL);
 
@@ -431,7 +431,7 @@ static int dbgdev_address_watch_diq(struct kfd_dbgdev *dbgdev,
 
 		aw_reg_add_dword =
 				dbgdev->dev->kfd2kgd->address_watch_get_offset(
-					dbgdev->dev->kgd,
+					dbgdev->dev->adev,
 					i,
 					ADDRESS_WATCH_REG_ADDR_HI);
 
@@ -441,7 +441,7 @@ static int dbgdev_address_watch_diq(struct kfd_dbgdev *dbgdev,
 
 		aw_reg_add_dword =
 				dbgdev->dev->kfd2kgd->address_watch_get_offset(
-					dbgdev->dev->kgd,
+					dbgdev->dev->adev,
 					i,
 					ADDRESS_WATCH_REG_ADDR_LO);
 
@@ -457,7 +457,7 @@ static int dbgdev_address_watch_diq(struct kfd_dbgdev *dbgdev,
 
 		aw_reg_add_dword =
 				dbgdev->dev->kfd2kgd->address_watch_get_offset(
-					dbgdev->dev->kgd,
+					dbgdev->dev->adev,
 					i,
 					ADDRESS_WATCH_REG_CNTL);
 
@@ -752,7 +752,7 @@ static int dbgdev_wave_control_nodiq(struct kfd_dbgdev *dbgdev,
 
 	pr_debug("\t\t %30s\n", "* * * * * * * * * * * * * * * * * *");
 
-	return dbgdev->dev->kfd2kgd->wave_control_execute(dbgdev->dev->kgd,
+	return dbgdev->dev->kfd2kgd->wave_control_execute(dbgdev->dev->adev,
 							reg_gfx_index.u32All,
 							reg_sq_cmd.u32All);
 }
@@ -784,7 +784,7 @@ int dbgdev_wave_reset_wavefronts(struct kfd_dev *dev, struct kfd_process *p)
 
 	for (vmid = first_vmid_to_scan; vmid <= last_vmid_to_scan; vmid++) {
 		status = dev->kfd2kgd->get_atc_vmid_pasid_mapping_info
-				(dev->kgd, vmid, &queried_pasid);
+				(dev->adev, vmid, &queried_pasid);
 
 		if (status && queried_pasid == p->pasid) {
 			pr_debug("Killing wave fronts of vmid %d and pasid 0x%x\n",
@@ -811,7 +811,7 @@ int dbgdev_wave_reset_wavefronts(struct kfd_dev *dev, struct kfd_process *p)
 	/* for non DIQ we need to patch the VMID: */
 	reg_sq_cmd.bits.vm_id = vmid;
 
-	dev->kfd2kgd->wave_control_execute(dev->kgd,
+	dev->kfd2kgd->wave_control_execute(dev->adev,
 					reg_gfx_index.u32All,
 					reg_sq_cmd.u32All);
 

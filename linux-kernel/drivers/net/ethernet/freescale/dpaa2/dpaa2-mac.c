@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
 /* Copyright 2019 NXP */
 
+#include <linux/acpi.h>
+#include <linux/pcs-lynx.h>
+#include <linux/property.h>
+
 #include "dpaa2-eth.h"
 #include "dpaa2-mac.h"
 
@@ -15,6 +19,18 @@ static int phy_mode(enum dpmac_eth_if eth_if, phy_interface_t *if_mode)
 	case DPMAC_ETH_IF_RGMII:
 		*if_mode = PHY_INTERFACE_MODE_RGMII;
 		break;
+	case DPMAC_ETH_IF_USXGMII:
+		*if_mode = PHY_INTERFACE_MODE_USXGMII;
+		break;
+	case DPMAC_ETH_IF_QSGMII:
+		*if_mode = PHY_INTERFACE_MODE_QSGMII;
+		break;
+	case DPMAC_ETH_IF_SGMII:
+		*if_mode = PHY_INTERFACE_MODE_SGMII;
+		break;
+	case DPMAC_ETH_IF_XFI:
+		*if_mode = PHY_INTERFACE_MODE_10GBASER;
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -22,98 +38,66 @@ static int phy_mode(enum dpmac_eth_if eth_if, phy_interface_t *if_mode)
 	return 0;
 }
 
-/* Caller must call of_node_put on the returned value */
-static struct device_node *dpaa2_mac_get_node(u16 dpmac_id)
+static struct fwnode_handle *dpaa2_mac_get_node(struct device *dev,
+						u16 dpmac_id)
 {
-	struct device_node *dpmacs, *dpmac = NULL;
-	u32 id;
+	struct fwnode_handle *fwnode, *parent = NULL, *child  = NULL;
+	struct device_node *dpmacs = NULL;
 	int err;
+	u32 id;
 
-	dpmacs = of_find_node_by_name(NULL, "dpmacs");
-	if (!dpmacs)
-		return NULL;
-
-	while ((dpmac = of_get_next_child(dpmacs, dpmac)) != NULL) {
-		err = of_property_read_u32(dpmac, "reg", &id);
-		if (err)
-			continue;
-		if (id == dpmac_id)
-			break;
+	fwnode = dev_fwnode(dev->parent);
+	if (is_of_node(fwnode)) {
+		dpmacs = of_find_node_by_name(NULL, "dpmacs");
+		if (!dpmacs)
+			return NULL;
+		parent = of_fwnode_handle(dpmacs);
+	} else if (is_acpi_node(fwnode)) {
+		parent = fwnode;
+	} else {
+		/* The root dprc device didn't yet get to finalize it's probe,
+		 * thus the fwnode field is not yet set. Defer probe if we are
+		 * facing this situation.
+		 */
+		return ERR_PTR(-EPROBE_DEFER);
 	}
 
-	of_node_put(dpmacs);
+	if (!parent)
+		return NULL;
 
-	return dpmac;
+	fwnode_for_each_child_node(parent, child) {
+		err = -EINVAL;
+		if (is_acpi_device_node(child))
+			err = acpi_get_local_address(ACPI_HANDLE_FWNODE(child), &id);
+		else if (is_of_node(child))
+			err = of_property_read_u32(to_of_node(child), "reg", &id);
+		if (err)
+			continue;
+
+		if (id == dpmac_id) {
+			of_node_put(dpmacs);
+			return child;
+		}
+	}
+	of_node_put(dpmacs);
+	return NULL;
 }
 
-static int dpaa2_mac_get_if_mode(struct device_node *node,
+static int dpaa2_mac_get_if_mode(struct fwnode_handle *dpmac_node,
 				 struct dpmac_attr attr)
 {
 	phy_interface_t if_mode;
 	int err;
 
-	err = of_get_phy_mode(node, &if_mode);
-	if (!err)
-		return if_mode;
+	err = fwnode_get_phy_mode(dpmac_node);
+	if (err > 0)
+		return err;
 
 	err = phy_mode(attr.eth_if, &if_mode);
 	if (!err)
 		return if_mode;
 
 	return err;
-}
-
-static bool dpaa2_mac_phy_mode_mismatch(struct dpaa2_mac *mac,
-					phy_interface_t interface)
-{
-	switch (interface) {
-	case PHY_INTERFACE_MODE_RGMII:
-	case PHY_INTERFACE_MODE_RGMII_ID:
-	case PHY_INTERFACE_MODE_RGMII_RXID:
-	case PHY_INTERFACE_MODE_RGMII_TXID:
-		return (interface != mac->if_mode);
-	default:
-		return true;
-	}
-}
-
-static void dpaa2_mac_validate(struct phylink_config *config,
-			       unsigned long *supported,
-			       struct phylink_link_state *state)
-{
-	struct dpaa2_mac *mac = phylink_to_dpaa2_mac(config);
-	__ETHTOOL_DECLARE_LINK_MODE_MASK(mask) = { 0, };
-
-	if (state->interface != PHY_INTERFACE_MODE_NA &&
-	    dpaa2_mac_phy_mode_mismatch(mac, state->interface)) {
-		goto empty_set;
-	}
-
-	phylink_set_port_modes(mask);
-	phylink_set(mask, Autoneg);
-	phylink_set(mask, Pause);
-	phylink_set(mask, Asym_Pause);
-
-	switch (state->interface) {
-	case PHY_INTERFACE_MODE_RGMII:
-	case PHY_INTERFACE_MODE_RGMII_ID:
-	case PHY_INTERFACE_MODE_RGMII_RXID:
-	case PHY_INTERFACE_MODE_RGMII_TXID:
-		phylink_set(mask, 10baseT_Full);
-		phylink_set(mask, 100baseT_Full);
-		phylink_set(mask, 1000baseT_Full);
-		break;
-	default:
-		goto empty_set;
-	}
-
-	linkmode_and(supported, supported, mask);
-	linkmode_and(state->advertising, state->advertising, mask);
-
-	return;
-
-empty_set:
-	linkmode_zero(supported);
 }
 
 static void dpaa2_mac_config(struct phylink_config *config, unsigned int mode,
@@ -123,27 +107,43 @@ static void dpaa2_mac_config(struct phylink_config *config, unsigned int mode,
 	struct dpmac_link_state *dpmac_state = &mac->state;
 	int err;
 
-	if (state->speed != SPEED_UNKNOWN)
-		dpmac_state->rate = state->speed;
-
-	if (state->duplex != DUPLEX_UNKNOWN) {
-		if (!state->duplex)
-			dpmac_state->options |= DPMAC_LINK_OPT_HALF_DUPLEX;
-		else
-			dpmac_state->options &= ~DPMAC_LINK_OPT_HALF_DUPLEX;
-	}
-
 	if (state->an_enabled)
 		dpmac_state->options |= DPMAC_LINK_OPT_AUTONEG;
 	else
 		dpmac_state->options &= ~DPMAC_LINK_OPT_AUTONEG;
 
-	if (state->pause & MLO_PAUSE_RX)
+	err = dpmac_set_link_state(mac->mc_io, 0,
+				   mac->mc_dev->mc_handle, dpmac_state);
+	if (err)
+		netdev_err(mac->net_dev, "%s: dpmac_set_link_state() = %d\n",
+			   __func__, err);
+}
+
+static void dpaa2_mac_link_up(struct phylink_config *config,
+			      struct phy_device *phy,
+			      unsigned int mode, phy_interface_t interface,
+			      int speed, int duplex,
+			      bool tx_pause, bool rx_pause)
+{
+	struct dpaa2_mac *mac = phylink_to_dpaa2_mac(config);
+	struct dpmac_link_state *dpmac_state = &mac->state;
+	int err;
+
+	dpmac_state->up = 1;
+
+	dpmac_state->rate = speed;
+
+	if (duplex == DUPLEX_HALF)
+		dpmac_state->options |= DPMAC_LINK_OPT_HALF_DUPLEX;
+	else if (duplex == DUPLEX_FULL)
+		dpmac_state->options &= ~DPMAC_LINK_OPT_HALF_DUPLEX;
+
+	if (rx_pause)
 		dpmac_state->options |= DPMAC_LINK_OPT_PAUSE;
 	else
 		dpmac_state->options &= ~DPMAC_LINK_OPT_PAUSE;
 
-	if (!!(state->pause & MLO_PAUSE_RX) ^ !!(state->pause & MLO_PAUSE_TX))
+	if (rx_pause ^ tx_pause)
 		dpmac_state->options |= DPMAC_LINK_OPT_ASYM_PAUSE;
 	else
 		dpmac_state->options &= ~DPMAC_LINK_OPT_ASYM_PAUSE;
@@ -151,21 +151,8 @@ static void dpaa2_mac_config(struct phylink_config *config, unsigned int mode,
 	err = dpmac_set_link_state(mac->mc_io, 0,
 				   mac->mc_dev->mc_handle, dpmac_state);
 	if (err)
-		netdev_err(mac->net_dev, "dpmac_set_link_state() = %d\n", err);
-}
-
-static void dpaa2_mac_link_up(struct phylink_config *config, unsigned int mode,
-			      phy_interface_t interface, struct phy_device *phy)
-{
-	struct dpaa2_mac *mac = phylink_to_dpaa2_mac(config);
-	struct dpmac_link_state *dpmac_state = &mac->state;
-	int err;
-
-	dpmac_state->up = 1;
-	err = dpmac_set_link_state(mac->mc_io, 0,
-				   mac->mc_dev->mc_handle, dpmac_state);
-	if (err)
-		netdev_err(mac->net_dev, "dpmac_set_link_state() = %d\n", err);
+		netdev_err(mac->net_dev, "%s: dpmac_set_link_state() = %d\n",
+			   __func__, err);
 }
 
 static void dpaa2_mac_link_down(struct phylink_config *config,
@@ -184,115 +171,154 @@ static void dpaa2_mac_link_down(struct phylink_config *config,
 }
 
 static const struct phylink_mac_ops dpaa2_mac_phylink_ops = {
-	.validate = dpaa2_mac_validate,
+	.validate = phylink_generic_validate,
 	.mac_config = dpaa2_mac_config,
 	.mac_link_up = dpaa2_mac_link_up,
 	.mac_link_down = dpaa2_mac_link_down,
 };
 
-bool dpaa2_mac_is_type_fixed(struct fsl_mc_device *dpmac_dev,
-			     struct fsl_mc_io *mc_io)
+static int dpaa2_pcs_create(struct dpaa2_mac *mac,
+			    struct fwnode_handle *dpmac_node,
+			    int id)
 {
-	struct dpmac_attr attr;
-	bool fixed = false;
-	u16 mc_handle = 0;
-	int err;
+	struct mdio_device *mdiodev;
+	struct fwnode_handle *node;
 
-	err = dpmac_open(mc_io, 0, dpmac_dev->obj_desc.id,
-			 &mc_handle);
-	if (err || !mc_handle)
-		return false;
+	node = fwnode_find_reference(dpmac_node, "pcs-handle", 0);
+	if (IS_ERR(node)) {
+		/* do not error out on old DTS files */
+		netdev_warn(mac->net_dev, "pcs-handle node not found\n");
+		return 0;
+	}
 
-	err = dpmac_get_attributes(mc_io, 0, mc_handle, &attr);
-	if (err)
-		goto out;
+	if (!fwnode_device_is_available(node)) {
+		netdev_err(mac->net_dev, "pcs-handle node not available\n");
+		fwnode_handle_put(node);
+		return -ENODEV;
+	}
 
-	if (attr.link_type == DPMAC_LINK_TYPE_FIXED)
-		fixed = true;
+	mdiodev = fwnode_mdio_find_device(node);
+	fwnode_handle_put(node);
+	if (!mdiodev)
+		return -EPROBE_DEFER;
 
-out:
-	dpmac_close(mc_io, 0, mc_handle);
+	mac->pcs = lynx_pcs_create(mdiodev);
+	if (!mac->pcs) {
+		netdev_err(mac->net_dev, "lynx_pcs_create() failed\n");
+		put_device(&mdiodev->dev);
+		return -ENOMEM;
+	}
 
-	return fixed;
+	return 0;
+}
+
+static void dpaa2_pcs_destroy(struct dpaa2_mac *mac)
+{
+	struct phylink_pcs *phylink_pcs = mac->pcs;
+
+	if (phylink_pcs) {
+		struct mdio_device *mdio = lynx_get_mdio_device(phylink_pcs);
+		struct device *dev = &mdio->dev;
+
+		lynx_pcs_destroy(phylink_pcs);
+		put_device(dev);
+		mac->pcs = NULL;
+	}
 }
 
 int dpaa2_mac_connect(struct dpaa2_mac *mac)
 {
-	struct fsl_mc_device *dpmac_dev = mac->mc_dev;
 	struct net_device *net_dev = mac->net_dev;
-	struct device_node *dpmac_node;
+	struct fwnode_handle *dpmac_node;
 	struct phylink *phylink;
-	struct dpmac_attr attr;
 	int err;
 
-	err = dpmac_open(mac->mc_io, 0, dpmac_dev->obj_desc.id,
-			 &dpmac_dev->mc_handle);
-	if (err || !dpmac_dev->mc_handle) {
-		netdev_err(net_dev, "dpmac_open() = %d\n", err);
+	mac->if_link_type = mac->attr.link_type;
+
+	dpmac_node = mac->fw_node;
+	if (!dpmac_node) {
+		netdev_err(net_dev, "No dpmac@%d node found.\n", mac->attr.id);
 		return -ENODEV;
 	}
 
-	err = dpmac_get_attributes(mac->mc_io, 0, dpmac_dev->mc_handle, &attr);
-	if (err) {
-		netdev_err(net_dev, "dpmac_get_attributes() = %d\n", err);
-		goto err_close_dpmac;
-	}
-
-	dpmac_node = dpaa2_mac_get_node(attr.id);
-	if (!dpmac_node) {
-		netdev_err(net_dev, "No dpmac@%d node found.\n", attr.id);
-		err = -ENODEV;
-		goto err_close_dpmac;
-	}
-
-	err = dpaa2_mac_get_if_mode(dpmac_node, attr);
-	if (err < 0) {
-		err = -EINVAL;
-		goto err_put_node;
-	}
+	err = dpaa2_mac_get_if_mode(dpmac_node, mac->attr);
+	if (err < 0)
+		return -EINVAL;
 	mac->if_mode = err;
 
 	/* The MAC does not have the capability to add RGMII delays so
 	 * error out if the interface mode requests them and there is no PHY
 	 * to act upon them
 	 */
-	if (of_phy_is_fixed_link(dpmac_node) &&
+	if (of_phy_is_fixed_link(to_of_node(dpmac_node)) &&
 	    (mac->if_mode == PHY_INTERFACE_MODE_RGMII_ID ||
 	     mac->if_mode == PHY_INTERFACE_MODE_RGMII_RXID ||
 	     mac->if_mode == PHY_INTERFACE_MODE_RGMII_TXID)) {
 		netdev_err(net_dev, "RGMII delay not supported\n");
-		err = -EINVAL;
-		goto err_put_node;
+		return -EINVAL;
 	}
 
+	if ((mac->attr.link_type == DPMAC_LINK_TYPE_PHY &&
+	     mac->attr.eth_if != DPMAC_ETH_IF_RGMII) ||
+	    mac->attr.link_type == DPMAC_LINK_TYPE_BACKPLANE) {
+		err = dpaa2_pcs_create(mac, dpmac_node, mac->attr.id);
+		if (err)
+			return err;
+	}
+
+	memset(&mac->phylink_config, 0, sizeof(mac->phylink_config));
 	mac->phylink_config.dev = &net_dev->dev;
 	mac->phylink_config.type = PHYLINK_NETDEV;
 
+	mac->phylink_config.mac_capabilities = MAC_SYM_PAUSE | MAC_ASYM_PAUSE |
+		MAC_10FD | MAC_100FD | MAC_1000FD | MAC_2500FD | MAC_5000FD |
+		MAC_10000FD;
+
+	/* We support the current interface mode, and if we have a PCS
+	 * similar interface modes that do not require the PLLs to be
+	 * reconfigured.
+	 */
+	__set_bit(mac->if_mode, mac->phylink_config.supported_interfaces);
+	if (mac->pcs) {
+		switch (mac->if_mode) {
+		case PHY_INTERFACE_MODE_1000BASEX:
+		case PHY_INTERFACE_MODE_SGMII:
+			__set_bit(PHY_INTERFACE_MODE_1000BASEX,
+				  mac->phylink_config.supported_interfaces);
+			__set_bit(PHY_INTERFACE_MODE_SGMII,
+				  mac->phylink_config.supported_interfaces);
+			break;
+
+		default:
+			break;
+		}
+	}
+
 	phylink = phylink_create(&mac->phylink_config,
-				 of_fwnode_handle(dpmac_node), mac->if_mode,
+				 dpmac_node, mac->if_mode,
 				 &dpaa2_mac_phylink_ops);
 	if (IS_ERR(phylink)) {
 		err = PTR_ERR(phylink);
-		goto err_put_node;
+		goto err_pcs_destroy;
 	}
 	mac->phylink = phylink;
 
-	err = phylink_of_phy_connect(mac->phylink, dpmac_node, 0);
+	if (mac->pcs)
+		phylink_set_pcs(mac->phylink, mac->pcs);
+
+	err = phylink_fwnode_phy_connect(mac->phylink, dpmac_node, 0);
 	if (err) {
-		netdev_err(net_dev, "phylink_of_phy_connect() = %d\n", err);
+		netdev_err(net_dev, "phylink_fwnode_phy_connect() = %d\n", err);
 		goto err_phylink_destroy;
 	}
-
-	of_node_put(dpmac_node);
 
 	return 0;
 
 err_phylink_destroy:
 	phylink_destroy(mac->phylink);
-err_put_node:
-	of_node_put(dpmac_node);
-err_close_dpmac:
-	dpmac_close(mac->mc_io, 0, dpmac_dev->mc_handle);
+err_pcs_destroy:
+	dpaa2_pcs_destroy(mac);
+
 	return err;
 }
 
@@ -303,7 +329,56 @@ void dpaa2_mac_disconnect(struct dpaa2_mac *mac)
 
 	phylink_disconnect_phy(mac->phylink);
 	phylink_destroy(mac->phylink);
-	dpmac_close(mac->mc_io, 0, mac->mc_dev->mc_handle);
+	dpaa2_pcs_destroy(mac);
+}
+
+int dpaa2_mac_open(struct dpaa2_mac *mac)
+{
+	struct fsl_mc_device *dpmac_dev = mac->mc_dev;
+	struct net_device *net_dev = mac->net_dev;
+	struct fwnode_handle *fw_node;
+	int err;
+
+	err = dpmac_open(mac->mc_io, 0, dpmac_dev->obj_desc.id,
+			 &dpmac_dev->mc_handle);
+	if (err || !dpmac_dev->mc_handle) {
+		netdev_err(net_dev, "dpmac_open() = %d\n", err);
+		return -ENODEV;
+	}
+
+	err = dpmac_get_attributes(mac->mc_io, 0, dpmac_dev->mc_handle,
+				   &mac->attr);
+	if (err) {
+		netdev_err(net_dev, "dpmac_get_attributes() = %d\n", err);
+		goto err_close_dpmac;
+	}
+
+	/* Find the device node representing the MAC device and link the device
+	 * behind the associated netdev to it.
+	 */
+	fw_node = dpaa2_mac_get_node(&mac->mc_dev->dev, mac->attr.id);
+	if (IS_ERR(fw_node)) {
+		err = PTR_ERR(fw_node);
+		goto err_close_dpmac;
+	}
+
+	mac->fw_node = fw_node;
+	net_dev->dev.of_node = to_of_node(mac->fw_node);
+
+	return 0;
+
+err_close_dpmac:
+	dpmac_close(mac->mc_io, 0, dpmac_dev->mc_handle);
+	return err;
+}
+
+void dpaa2_mac_close(struct dpaa2_mac *mac)
+{
+	struct fsl_mc_device *dpmac_dev = mac->mc_dev;
+
+	dpmac_close(mac->mc_io, 0, dpmac_dev->mc_handle);
+	if (mac->fw_node)
+		fwnode_handle_put(mac->fw_node);
 }
 
 static char dpaa2_mac_ethtool_stats[][ETH_GSTRING_LEN] = {
