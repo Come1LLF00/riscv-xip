@@ -16,5 +16,5 @@ fi
 
 cd $KERNEL
 
-make ARCH=riscv CROSS_COMPILE=riscv64-linux- nommu_k210_defconfig
-make ARCH=riscv CROSS_COMPILE=riscv64-linux- -j
+make ARCH=riscv CROSS_COMPILE=riscv64-linux- O=../artifacts/images/kendryte-k210/ nommu_k210_defconfig
+make ARCH=riscv CROSS_COMPILE=riscv64-linux- O=../artifacts/images/kendryte-k210/ -j $(nproc)

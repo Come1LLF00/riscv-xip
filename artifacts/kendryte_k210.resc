@@ -1,8 +1,7 @@
 using sysbus
 
-set elf $ORIGIN/images/u-boot
-set xip $ORIGIN/images/xipImage
-set initrd $ORIGIN/images/initrd.img
+set elf $ORIGIN/images/kendryte-k210/5.17-rc8/arch/riscv/boot/loader
+set xip $ORIGIN/images/kendryte-k210/5.17-rc8/arch/riscv/boot/Image
 
 mach create
 
@@ -27,9 +26,8 @@ machine StartGdbServer 3333
 macro reset
 """
     sysbus LoadBinary $xip 0x21000000
-#    sysbus LoadBinary $initrd 0x80080000
     sysbus SetPCOnAllCores 0x21000000
-#    sysbus LoadELF $elf
+    sysbus LoadELF $elf
 """
 
 runMacro $reset
