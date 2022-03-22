@@ -216,6 +216,21 @@ static void __init setup_bootmem(void)
 	memblock_allow_resize();
 }
 
+#ifdef CONFIG_XIP_KERNEL
+#define phys_ram_base  (*(phys_addr_t *)XIP_FIXUP(&phys_ram_base))
+extern char _xiprom[], _exiprom[], __data_loc;
+
+/* called from head.S with MMU off */
+asmlinkage void __init __copy_data(void)
+{
+	void *from = (void *)(&__data_loc);
+	void *to = (void *)CONFIG_PHYS_RAM_BASE;
+	size_t sz = (size_t)((uintptr_t)(&_end) - (uintptr_t)(&_sdata));
+
+	memcpy(to, from, sz);
+}
+#endif
+
 #ifdef CONFIG_MMU
 struct pt_alloc_ops pt_ops __initdata;
 
@@ -521,21 +536,6 @@ static uintptr_t __init best_map_size(phys_addr_t base, phys_addr_t size)
 
 	return PMD_SIZE;
 }
-
-#ifdef CONFIG_XIP_KERNEL
-#define phys_ram_base  (*(phys_addr_t *)XIP_FIXUP(&phys_ram_base))
-extern char _xiprom[], _exiprom[], __data_loc;
-
-/* called from head.S with MMU off */
-asmlinkage void __init __copy_data(void)
-{
-	void *from = (void *)(&__data_loc);
-	void *to = (void *)CONFIG_PHYS_RAM_BASE;
-	size_t sz = (size_t)((uintptr_t)(&_end) - (uintptr_t)(&_sdata));
-
-	memcpy(to, from, sz);
-}
-#endif
 
 #ifdef CONFIG_STRICT_KERNEL_RWX
 static __init pgprot_t pgprot_from_va(uintptr_t va)

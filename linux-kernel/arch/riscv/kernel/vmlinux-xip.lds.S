@@ -6,7 +6,7 @@
  */
 
 #include <asm/pgtable.h>
-#define LOAD_OFFSET KERNEL_LINK_ADDR
+#define LOAD_OFFSET CONFIG_XIP_PHYS_ADDR
 /* No __ro_after_init data in the .rodata section - which will always be ro */
 #define RO_AFTER_INIT_DATA
 
@@ -64,10 +64,10 @@ SECTIONS
  * From this point, stuff is considered writable and will be copied to RAM
  */
 	__data_loc = ALIGN(PAGE_SIZE);		/* location in file */
-	. = KERNEL_LINK_ADDR + XIP_OFFSET;	/* location in memory */
+	. = PAGE_OFFSET;			/* location in memory */
 
 #undef LOAD_OFFSET
-#define LOAD_OFFSET (KERNEL_LINK_ADDR + XIP_OFFSET - (__data_loc & XIP_OFFSET_MASK))
+#define LOAD_OFFSET (PAGE_OFFSET - (__data_loc & 0xFFFFFF))
 
 	_sdata = .;			/* Start of data section */
 	_data = .;
