@@ -6,7 +6,7 @@ $bin?=@https://dl.antmicro.com/projects/renode/pse-freertos-lwip.elf-s_1413416-f
 using sysbus
 mach create
 
-machine LoadPlatformDescription @platforms/cpus/polarfire-soc.repl
+machine LoadPlatformDescription @polarfire-soc.repl
 
 showAnalyzer mmuart0
 

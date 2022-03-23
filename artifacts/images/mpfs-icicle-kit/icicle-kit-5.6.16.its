@@ -1,0 +1,47 @@
+/dts-v1/;
+
+/ {
+        description = "MPFS Icicle Kit FIT Image";
+        #address-cells = <2>;
+
+        images {
+                kernel@1 {
+                        description = "Linux kernel";
+                        data = /incbin/("fits/official-mpfs-icicle-kit-5.6.16-fitImage_kernel");
+                        type = "kernel";
+                        arch = "riscv";
+                        os = "linux";
+                        compression = "none";
+                        load = <0x80200000>;
+                        entry = <0x80200000>;
+                };
+                ramdisk@initramfs.cpio.gz {
+                        description = "buildroot initramfs";
+                        data = /incbin/("fits/official-mpfs-icicle-kit-5.6.16-fitImage_ramdisk");
+                        type = "ramdisk";
+                        arch = "riscv";
+                        os = "linux";
+                        compression = "unknown";
+                        load = <0x84000000>;
+                };
+                fdt@microchip_icicle-kit-es-a000-microchip.dtb {
+                        description = "Flattened Device Tree blob";
+                        data = /incbin/("fits/official-mpfs-icicle-kit-5.6.16-fitImage_fdt");
+                        type = "flat_dt";
+                        arch = "riscv";
+                        compression = "none";
+                        load = <0x82200000>;
+                };
+        };
+
+        configurations {
+                default = "conf@microchip_icicle-kit-es-a000-microchip.dtb";
+                conf@microchip_icicle-kit-es-a000-microchip.dtb {
+                        description = "1 Linux kernel, FDT blob";
+                        kernel = "kernel@1";
+                        ramdisk = "ramdisk@initramfs.cpio.gz";
+                        fdt = "fdt@microchip_icicle-kit-es-a000-microchip.dtb";
+                };
+        };
+
+};             
