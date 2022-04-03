@@ -16,7 +16,7 @@
 #include <asm/image.h>
 #include "efi-header.S"
 
-#if defined (CONFIG_XIP_KERNEL) && defined (CONFIG_MMU)
+#ifdef CONFIG_XIP_KERNEL
 .macro XIP_FIXUP_OFFSET reg
 	REG_L t0, _xip_fixup
 	add \reg, \reg, t0
@@ -265,7 +265,7 @@ pmp_done:
 .Lgood_cores:
 
 	/* The lottery system is only required for spinwait booting method */
-#if !defined (CONFIG_XIP_KERNEL) || !defined (CONFIG_MMU)
+#ifndef CONFIG_XIP_KERNEL
 	/* Pick one hart to run the main boot sequence */
 	la a3, hart_lottery
 	li a2, 1

@@ -121,7 +121,6 @@ extern phys_addr_t phys_ram_base;
 #define is_linear_mapping(x)	\
 	((x) >= PAGE_OFFSET && (!IS_ENABLED(CONFIG_64BIT) || (x) < PAGE_OFFSET + KERN_VIRT_SIZE))
 
-#ifdef CONFIG_MMU
 #define linear_mapping_pa_to_va(x)	((void *)((unsigned long)(x) + kernel_map.va_pa_offset))
 #define kernel_mapping_pa_to_va(y)	({						\
 	unsigned long _y = y;								\
@@ -129,14 +128,9 @@ extern phys_addr_t phys_ram_base;
 		(void *)((unsigned long)(_y) + kernel_map.va_kernel_xip_pa_offset) :		\
 		(void *)((unsigned long)(_y) + kernel_map.va_kernel_pa_offset + XIP_OFFSET);	\
 	})
-#else
-#define linear_mapping_pa_to_va(x)  (x)
-#define kernel_mapping_pa_to_va(y)  linear_mapping_pa_to_va(x)
-#endif
 #define __pa_to_va_nodebug(x)		linear_mapping_pa_to_va(x)
 
 #define linear_mapping_va_to_pa(x)	((unsigned long)(x) - kernel_map.va_pa_offset)
-#ifdef CONFIG_MMU
 #define kernel_mapping_va_to_pa(y) ({						\
 	unsigned long _y = y;							\
 	(IS_ENABLED(CONFIG_XIP_KERNEL) && _y < kernel_map.virt_addr + XIP_OFFSET) ?	\
@@ -149,10 +143,6 @@ extern phys_addr_t phys_ram_base;
 	is_linear_mapping(_x) ?							\
 		linear_mapping_va_to_pa(_x) : kernel_mapping_va_to_pa(_x);	\
 	})
-#else
-#define kernel_mapping_va_to_pa(y)  linear_mapping_va_to_pa(y)
-#define __va_to_pa_nodebug(x) (x)
-#endif
 
 #ifdef CONFIG_DEBUG_VIRTUAL
 extern phys_addr_t __virt_to_phys(unsigned long x);

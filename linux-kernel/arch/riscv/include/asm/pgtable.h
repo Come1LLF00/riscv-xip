@@ -114,7 +114,7 @@
 #include <asm/pgtable-32.h>
 #endif /* CONFIG_64BIT */
 
-#if defined (CONFIG_XIP_KERNEL) && defined (CONFIG_MMU)
+#ifdef CONFIG_XIP_KERNEL
 #define XIP_FIXUP(addr) ({							\
 	uintptr_t __a = (uintptr_t)(addr);					\
 	(__a >= CONFIG_XIP_PHYS_ADDR && \
