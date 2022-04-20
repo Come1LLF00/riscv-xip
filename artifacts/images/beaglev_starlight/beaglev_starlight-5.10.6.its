@@ -1,0 +1,47 @@
+/dts-v1/;
+
+/ {
+        description = "U-boot FIT image for HiFive Nvdla";
+        #address-cells = <2>;
+
+        images {
+                vmlinux@1 {
+                        description = "vmlinux";
+                        data = /incbin/("fits/original.fit_vmlinux");
+                        type = "kernel";
+                        arch = "riscv";
+                        os = "linux";
+                        compression = "none";
+                        load = <0x80200000>;
+                        entry = <0x80200000>;
+                };
+                ramdisk@1 {
+                        description = "buildroot initramfs";
+                        data = /incbin/("fits/original.fit_ramdisk");
+                        type = "ramdisk";
+                        arch = "riscv";
+                        os = "linux";
+                        compression = "none";
+                        load = <0x86100000>;
+                };
+                fdt@1 {
+                        description = "unavailable";
+                        data = /incbin/("fits/original.fit_fdt");
+                        type = "flat_dt";
+                        arch = "riscv";
+                        compression = "none";
+                        load = <0x86000000>;
+                };
+        };
+
+        configurations {
+                default = "config-1";
+                config-1 {
+                        description = "HiFive Nvdla with opensbi";
+                        kernel = "vmlinux@1";
+                        ramdisk = "ramdisk@1";
+                        fdt = "fdt@1";
+                };
+        };
+
+};             
