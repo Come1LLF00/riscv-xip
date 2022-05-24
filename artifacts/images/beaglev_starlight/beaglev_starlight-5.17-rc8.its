@@ -5,7 +5,7 @@
         #address-cells = <2>;
 
         images {
-                vmlinux@1 {
+                vmlinux {
                         description = "vmlinux";
                         data = /incbin/("5.17-rc8/arch/riscv/boot/Image");
                         type = "kernel";
@@ -15,7 +15,7 @@
                         load = <0x80200000>;
                         entry = <0x80200000>;
                 };
-                ramdisk@1 {
+                ramdisk {
                         description = "buildroot initramfs";
                         data = /incbin/("fits/original.fit_ramdisk");
                         type = "ramdisk";
@@ -24,7 +24,7 @@
                         compression = "none";
                         load = <0x86100000>;
                 };
-                fdt@1 {
+                fdt {
                         description = "unavailable";
                         data = /incbin/("fits/original.fit_fdt");
                         type = "flat_dt";
@@ -38,9 +38,9 @@
                 default = "config-1";
                 config-1 {
                         description = "HiFive Nvdla with opensbi";
-                        kernel = "vmlinux@1";
-                        ramdisk = "ramdisk@1";
-                        fdt = "fdt@1";
+                        kernel = "vmlinux";
+                        ramdisk = "ramdisk";
+                        fdt = "fdt";
                 };
         };
 
